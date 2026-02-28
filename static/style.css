@@ -447,6 +447,16 @@ body{font-family:var(--font-ui);background:var(--bg);color:var(--text);height:10
 }
 .btn-download:hover{background:var(--bg-card2);border-color:var(--accent)}
 
+/* ========== PASTE BLOCKED WARNING ========== */
+.paste-warning{
+  position:fixed;top:60px;left:50%;transform:translateX(-50%) translateY(-20px);
+  z-index:9999;padding:.6rem 1.4rem;
+  background:var(--red);color:#fff;font-weight:600;font-size:.85rem;
+  border-radius:var(--radius-sm);box-shadow:0 4px 20px rgba(225,112,85,.4);
+  opacity:0;pointer-events:none;transition:opacity .25s ease,transform .25s ease;
+}
+.paste-warning.visible{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto}
+
 /* ========== TAB BLOCK OVERLAY ========== */
 .tab-block-overlay{
   position:fixed;inset:0;z-index:10000;

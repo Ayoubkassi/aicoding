@@ -103,6 +103,32 @@ function initMonaco() {
       tabSize: 4,
     });
     attachMonacoDetectors(state.editor);
+
+    // Block paste: override Monaco's built-in paste action
+    state.editor.addAction({
+      id: "block-paste",
+      label: "Block Paste",
+      keybindings: [
+        monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyV,
+        monaco.KeyMod.Shift | monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyV,
+      ],
+      run: () => {
+        if (_programmaticEdit) return;
+        logCheat("paste_blocked", "Attempted to paste into code editor — blocked");
+        state.cheatingStats.pasteCount++;
+        showPasteWarning();
+      },
+    });
+
+    // Also block the DOM paste event (right-click paste, etc.)
+    state.editor.getDomNode().addEventListener("paste", (e) => {
+      if (_programmaticEdit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      logCheat("paste_blocked", "Attempted to paste into code editor — blocked");
+      state.cheatingStats.pasteCount++;
+      showPasteWarning();
+    }, true);
   });
 }
 
@@ -500,7 +526,7 @@ function resumeMicIfActive() {
     }, 1000);
   }
 }
-
+  
 async function speakText(text) {
   if (!text) return resumeMicIfActive();
 
@@ -831,6 +857,14 @@ function initTabFocusDetector() {
   });
 }
 
+function showPasteWarning() {
+  let warn = $("#pasteWarning");
+  if (!warn) return;
+  warn.classList.add("visible");
+  clearTimeout(warn._hideTimer);
+  warn._hideTimer = setTimeout(() => { warn.classList.remove("visible"); }, 2500);
+}
+
 function attachMonacoDetectors(editor) {
   editor.onDidPaste((e) => {
     if (_programmaticEdit) return;
@@ -998,6 +1032,9 @@ function trackSpeechTiming_onResponse() {
 
 function computeIntegrityScore() {
   let score = 100;
+
+  // Paste attempts (blocked) are a strong signal
+  score -= Math.min(state.cheatingStats.pasteCount * 10, 30);
 
   // Tab-then-paste is the strongest cheating signal
   score -= Math.min(state.cheatingStats.tabThenPasteCount * 15, 40);
@@ -1199,7 +1236,7 @@ function buildFullReportText(decision) {
   report += `INTEGRITY SCORE: ${score}/100\n`;
   report += `───────────────────────────────────────────\n`;
   const flaggedEvents = state.cheatingLog.filter((e) =>
-    ["tab_blocked", "tab_then_paste", "large_paste", "typing_burst",
+    ["tab_blocked", "paste_blocked", "tab_then_paste", "large_paste", "typing_burst",
      "webcam_looking_away", "webcam_multiple_people", "webcam_second_screen",
      "fast_response", "long_silence"].includes(e.type)
   );
@@ -1252,7 +1289,7 @@ function renderIntegrityReport() {
   scoreEl.className = `integrity-score-value integrity-${color}`;
 
   const cheatingEvents = state.cheatingLog.filter((e) =>
-    ["tab_blocked", "tab_then_paste", "large_paste", "large_paste_input", "typing_burst",
+    ["tab_blocked", "paste_blocked", "tab_then_paste", "large_paste", "large_paste_input", "typing_burst",
      "webcam_looking_away", "webcam_multiple_people", "webcam_second_screen",
      "fast_response", "long_silence", "webcam_denied"].includes(e.type)
   );
@@ -1264,6 +1301,7 @@ function renderIntegrityReport() {
 
   const severityMap = {
     tab_blocked: "medium",
+    paste_blocked: "high",
     tab_then_paste: "high",
     large_paste: "medium", large_paste_input: "medium",
     typing_burst: "medium",
