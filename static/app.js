@@ -11,6 +11,28 @@ const state = {
   isWaiting: false,
   editor: null,
   currentLanguage: "python",
+  cheatingLog: [],
+  cheatingStats: {
+    tabSwitchCount: 0,
+    totalTimeAway: 0,
+    longestAbsence: 0,
+    pasteCount: 0,
+    largePasteCount: 0,
+    totalPastedChars: 0,
+    burstCount: 0,
+    totalKeystrokes: 0,
+    totalCharsAdded: 0,
+    avgTypingSpeed: 0,
+    webcamFlags: { lookingAway: 0, multiplePeople: 0, secondScreen: 0 },
+    webcamFramesAnalyzed: 0,
+    webcamConsecutiveLookAway: 0,
+    fastResponseCount: 0,
+    avgResponseTime: 0,
+    responseTimes: [],
+    tabThenPasteCount: 0,
+    longSilenceCount: 0,
+  },
+  sentimentHistory: [],
 };
 
 const $ = (s) => document.querySelector(s);
@@ -42,7 +64,7 @@ const defaultCode = {
   typescript: '// Write your code here\nconsole.log("Hello, World!");\n',
   cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n    cout << "Hello, World!" << endl;\n    return 0;\n}\n',
   c: '#include <stdio.h>\n\nint main() {\n    printf("Hello, World!\\n");\n    return 0;\n}\n',
-  java: 'public class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello, World!");\n    }\n}\n',
+  java: 'import java.util.*;\n\npublic class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello, World!");\n    }\n}\n',
   go: 'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello, World!")\n}\n',
   rust: 'fn main() {\n    println!("Hello, World!");\n}\n',
 };
@@ -80,6 +102,7 @@ function initMonaco() {
       suggest: { showSnippets: true },
       tabSize: 4,
     });
+    attachMonacoDetectors(state.editor);
   });
 }
 
@@ -89,7 +112,9 @@ function changeLanguage(lang) {
   const model = state.editor.getModel();
   monaco.editor.setModelLanguage(model, monacoLangMap[lang] || lang);
   if (state.editor.getValue().trim() === "" || isDefaultCode(state.editor.getValue())) {
+    _programmaticEdit = true;
     state.editor.setValue(defaultCode[lang] || `// ${lang}\n`);
+    setTimeout(() => { _programmaticEdit = false; }, 100);
   }
 }
 
@@ -159,6 +184,18 @@ YOUR ROLE — EVALUATOR, NOT HELPER:
 - Concise and direct. 1-3 sentences max per response.
 - Completely UNBIASED — never factor in gender, race, age, nationality, or any protected characteristic.
 
+GOLDEN RULE — DON'T INTERRUPT WHILE CODING:
+- When the candidate is actively working on their solution (writing code, explaining their approach, thinking out loud), DO NOT interrupt or give feedback yet.
+- Stay quiet and let them work. If you notice a mistake or a bug while they're coding, mentally note it but say NOTHING until they signal they're done.
+- Only engage when they explicitly:
+  - Run their code ([CODE RUN] message)
+  - Share their code with you ([CODE SHARED] message)
+  - Ask you a direct question
+  - Say something like "I'm done" / "what do you think?" / "let me know"
+- When they do run or share code, THEN you review what they wrote and ask probing questions.
+- If their code has issues, don't point them out. Ask: "Are you confident this will work?", "Do you think this handles all edge cases?", "What happens if the input is empty or very large?"
+- If their code works: Ask them to propose more test cases. Say things like "Can you think of edge cases that might break this?" or "What other inputs would you test with?"
+
 WHEN TO GIVE HINTS (strict rules):
 - Count how many times the candidate has been stuck with no progress. Track this internally.
 - LEVEL 0 (first sign of struggle): Say nothing helpful. Just ask "What are you thinking?" or "Walk me through your approach."
@@ -175,6 +212,7 @@ LANGUAGE SWITCHING:
 - Valid languages: python, javascript, typescript, cpp, c, go, java, rust
 - When switching, also update the "code" field with the same template translated to the new language.
 - If they don't ask to switch, set "language" to null.
+- JAVA SPECIFIC: Always use "public class Main" as the class name. Always include "import java.util.*;" at the top. The file is compiled as Main.java.
 
 INTERVIEW FLOW:
 1. INTRO (1 message, combine with step 2!) — Brief "Hi, let's get started." + present the problem immediately.
@@ -182,11 +220,13 @@ INTERVIEW FLOW:
    - Clear problem statement
    - 2-3 input/output examples (described verbally in "message")
    - Put ONLY a minimal skeleton in "code" (function signature + example calls, NO solution logic)
-3. CODING — The main phase (most time here). Your job is to OBSERVE and ASSESS:
-   - [CODE RUN] with output: Check if output looks correct. Ask "Does that look right to you?" Don't tell them.
-   - If their approach is wrong: Don't tell them. Ask "Can you walk me through your logic?" Let them find it.
-   - If code has bugs: Don't point them out. Ask "Have you tested this thoroughly?"
-   - If code works: Ask about complexity, optimization, or give a harder follow-up.
+3. CODING — The main phase (most time here). Your job is to OBSERVE SILENTLY and only respond at key moments:
+   - LET THE CANDIDATE WORK IN PEACE. Do NOT respond to every message. Stay silent while they code.
+   - [CODE RUN] with output: NOW you engage. Ask "Are you sure about this?" or "Do you think your code will work for all cases?" Don't tell them if it's right or wrong.
+   - [CODE SHARED]: Review their code. If bugs exist, ask: "What do you think happens with edge inputs?" If it works: "Can you propose a few more test cases to make sure?"
+   - If their approach is wrong: Don't tell them directly. Ask "Walk me through your logic step by step." Let them find the issue.
+   - If code works correctly: Ask about time/space complexity, then challenge them: "Can you optimize this?" or give a follow-up variation.
+   - Always push them to TEST MORE: "What other inputs would you try?" "What's the worst case?"
    - TAKE NOTES on everything: approach, mistakes, how they debug, communication, speed.
 4. REVIEW — Quick summary of how they did
 5. DECISION — Only when told to end
@@ -299,6 +339,12 @@ function updateSentiment(s) {
   const mood = $("#overallMood");
   mood.textContent = s.overall;
   mood.className = "mood-tag " + s.overall;
+
+  state.sentimentHistory.push({
+    ...s,
+    timestamp: Date.now(),
+    phase: state.currentPhase,
+  });
 }
 
 function addNotes(notes) {
@@ -347,6 +393,7 @@ let recognition = null;
 let isRecording = false;
 let finalTranscript = "";
 let silenceTimer = null;
+let _micCooldownUntil = 0;
 
 function initVoice() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -359,6 +406,8 @@ function initVoice() {
   recognition.maxAlternatives = 3;
 
   recognition.onresult = (e) => {
+    if (isSpeaking || Date.now() < _micCooldownUntil) return;
+
     let interim = "";
     finalTranscript = "";
     for (let i = 0; i < e.results.length; i++) {
@@ -371,35 +420,33 @@ function initVoice() {
     }
     $("#discussionInput").value = (finalTranscript + interim).trim();
 
-    // Auto-send after 2s of silence once we have a final transcript
     clearTimeout(silenceTimer);
     if (finalTranscript.trim()) {
       silenceTimer = setTimeout(() => {
-        if (isRecording && finalTranscript.trim()) {
+        if (isRecording && finalTranscript.trim() && !isSpeaking) {
           const text = $("#discussionInput").value.trim();
-          // Stop, send, then restart listening
           try { recognition.stop(); } catch {}
           finalTranscript = "";
           $("#discussionInput").value = "";
           if (text) sendMessage(text);
-          // Restart after a short delay to let the send go through
-          setTimeout(() => { if (isRecording) try { recognition.start(); } catch {} }, 500);
+          setTimeout(() => { if (isRecording && !isSpeaking) try { recognition.start(); } catch {} }, 500);
         }
       }, 2000);
     }
   };
 
   recognition.onend = () => {
-    // Always restart if mic is active (browser kills recognition after ~60s)
-    if (isRecording) {
-      setTimeout(() => { if (isRecording) try { recognition.start(); } catch {} }, 300);
+    if (isRecording && !isSpeaking) {
+      setTimeout(() => {
+        if (isRecording && !isSpeaking) try { recognition.start(); } catch {}
+      }, 300);
     }
   };
 
   recognition.onerror = (e) => {
     if (e.error === "no-speech" || e.error === "aborted") {
-      if (isRecording) {
-        setTimeout(() => { if (isRecording) try { recognition.start(); } catch {} }, 300);
+      if (isRecording && !isSpeaking) {
+        setTimeout(() => { if (isRecording && !isSpeaking) try { recognition.start(); } catch {} }, 300);
       }
       return;
     }
@@ -426,7 +473,9 @@ function unmuteMic() {
   const vs = $("#voiceStatus");
   vs.innerHTML = '<div class="voice-bar"><span></span><span></span><span></span><span></span><span></span></div> Mic ON — speak freely, auto-sends after pause';
   vs.classList.add("active");
-  try { recognition.start(); } catch {}
+  if (!isSpeaking) {
+    try { recognition.start(); } catch {}
+  }
 }
 
 function muteMic() {
@@ -442,8 +491,13 @@ let currentAudio = null;
 let isSpeaking = false;
 
 function resumeMicIfActive() {
-  if (isRecording && recognition) {
-    setTimeout(() => { try { recognition.start(); } catch {} }, 400);
+  if (isRecording && recognition && !isSpeaking) {
+    _micCooldownUntil = Date.now() + 1000;
+    finalTranscript = "";
+    $("#discussionInput").value = "";
+    setTimeout(() => {
+      if (isRecording && !isSpeaking) try { recognition.start(); } catch {}
+    }, 1000);
   }
 }
 
@@ -451,10 +505,11 @@ async function speakText(text) {
   if (!text) return resumeMicIfActive();
 
   isSpeaking = true;
-  // Pause mic so it doesn't pick up the AI voice
   if (recognition) try { recognition.stop(); } catch {};
+  clearTimeout(silenceTimer);
+  finalTranscript = "";
+  $("#discussionInput").value = "";
 
-  // Stop any previous audio
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
 
   try {
@@ -478,15 +533,18 @@ async function speakText(text) {
   } catch {
     // Silently fail — don't block the interview
   } finally {
-    currentAudio = null;
-    isSpeaking = false;
-    resumeMicIfActive();
+    if (isSpeaking) {
+      currentAudio = null;
+      isSpeaking = false;
+      resumeMicIfActive();
+    }
   }
 }
 
 // ==================== CORE INTERVIEW LOGIC ====================
 async function handleAIResponse(aiData) {
   addDiscussionEntry(aiData.message, "ai");
+  trackSpeechTiming_onQuestion();
   updateSentiment(aiData.sentiment);
   addNotes(aiData.notes);
   updatePhase(aiData.phase);
@@ -506,7 +564,9 @@ async function handleAIResponse(aiData) {
 
   // Inject code into editor if AI provided it (only for templates)
   if (aiData.code && state.editor) {
+    _programmaticEdit = true;
     state.editor.setValue(aiData.code);
+    setTimeout(() => { _programmaticEdit = false; }, 100);
     addDiscussionEntry("(Code loaded into editor)", "ai");
   }
 
@@ -525,6 +585,8 @@ async function handleAIResponse(aiData) {
 
 async function sendMessage(text) {
   if (!text || state.isWaiting) return;
+
+  trackSpeechTiming_onResponse();
 
   // Stop recognition during API call + TTS (speakText will resume it after)
   if (recognition) try { recognition.stop(); } catch {}
@@ -629,6 +691,7 @@ function showDecision(d) {
   showPage("decision");
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
   muteMic();
+  stopWebcamMonitor();
 
   $("#decisionMeta").textContent = `${state.candidateName} — ${state.position} — Duration: ${$("#timer").textContent}`;
 
@@ -684,12 +747,558 @@ function showDecision(d) {
     div.textContent = n;
     fn.appendChild(div);
   });
+
+  state._lastDecision = d;
+  renderHumanImpression();
+  renderIntegrityReport();
+
+  const dlBtn = $("#downloadReportBtn");
+  if (dlBtn) dlBtn.addEventListener("click", downloadReport);
+}
+
+// ==================== CHEATING DETECTION ====================
+function logCheat(type, detail) {
+  state.cheatingLog.push({
+    type,
+    detail,
+    timestamp: Date.now(),
+    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+  });
+}
+
+let _tabBlurTime = null;
+let _lastTabReturnTime = null;
+let _webcamInterval = null;
+let _typingWindow = [];
+let _programmaticEdit = false;
+
+function initCheatingDetection() {
+  initTabFocusDetector();
+  startWebcamMonitor();
+}
+
+function initTabFocusDetector() {
+  const overlay = $("#tabBlockOverlay");
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      _tabBlurTime = Date.now();
+      state.cheatingStats.tabSwitchCount++;
+      logCheat("tab_blocked", "Attempted to switch away from interview tab");
+    } else if (_tabBlurTime) {
+      const away = (Date.now() - _tabBlurTime) / 1000;
+      state.cheatingStats.totalTimeAway += away;
+      if (away > state.cheatingStats.longestAbsence) {
+        state.cheatingStats.longestAbsence = away;
+      }
+      _lastTabReturnTime = Date.now();
+      _tabBlurTime = null;
+      if (overlay) {
+        overlay.classList.add("visible");
+        setTimeout(() => { overlay.classList.remove("visible"); }, 3000);
+      }
+    }
+  });
+
+  window.addEventListener("blur", () => {
+    if (!_tabBlurTime) {
+      _tabBlurTime = Date.now();
+      state.cheatingStats.tabSwitchCount++;
+    }
+  });
+
+  window.addEventListener("focus", () => {
+    if (_tabBlurTime) {
+      const away = (Date.now() - _tabBlurTime) / 1000;
+      state.cheatingStats.totalTimeAway += away;
+      if (away > state.cheatingStats.longestAbsence) {
+        state.cheatingStats.longestAbsence = away;
+      }
+      _lastTabReturnTime = Date.now();
+      _tabBlurTime = null;
+      if (overlay) {
+        overlay.classList.add("visible");
+        setTimeout(() => { overlay.classList.remove("visible"); }, 3000);
+      }
+    }
+  });
+
+  window.addEventListener("beforeunload", (e) => {
+    if (state.currentPhase !== "decision") {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
+}
+
+function attachMonacoDetectors(editor) {
+  editor.onDidPaste((e) => {
+    if (_programmaticEdit) return;
+
+    const model = editor.getModel();
+    const pastedText = model.getValueInRange(e.range);
+    const charCount = pastedText.length;
+    state.cheatingStats.pasteCount++;
+    state.cheatingStats.totalPastedChars += charCount;
+
+    const wasRecentTabReturn = _lastTabReturnTime && (Date.now() - _lastTabReturnTime < 8000);
+
+    if (charCount > 50) {
+      state.cheatingStats.largePasteCount++;
+      if (wasRecentTabReturn) {
+        state.cheatingStats.tabThenPasteCount++;
+        logCheat("tab_then_paste", `Switched away, came back, and pasted ${charCount} chars (copy from external source)`);
+      } else {
+        logCheat("large_paste", `Pasted ${charCount} chars into editor`);
+      }
+    }
+  });
+
+  editor.onDidChangeModelContent((e) => {
+    // Skip programmatic changes (setValue, language switch, AI code load)
+    if (_programmaticEdit || e.isFlush) return;
+    // Skip undo/redo operations
+    if (e.isUndoing || e.isRedoing) return;
+
+    const now = Date.now();
+    let charsAdded = 0;
+    for (const change of e.changes) {
+      charsAdded += change.text.length;
+    }
+
+    // Multi-line editor operations (uncomment, format, etc.) produce many small changes at once — skip them
+    if (e.changes.length > 5) return;
+
+    state.cheatingStats.totalKeystrokes++;
+    state.cheatingStats.totalCharsAdded += charsAdded;
+
+    _typingWindow.push({ time: now, chars: charsAdded });
+    _typingWindow = _typingWindow.filter((w) => now - w.time < 1000);
+
+    const windowChars = _typingWindow.reduce((sum, w) => sum + w.chars, 0);
+    if (windowChars > 200 && _typingWindow.length <= 3) {
+      state.cheatingStats.burstCount++;
+      logCheat("typing_burst", `${windowChars} chars appeared in <1s (likely paste or auto-complete)`);
+    }
+  });
+}
+
+function attachGlobalPasteDetector() {
+  const input = $("#discussionInput");
+  if (input) {
+    input.addEventListener("paste", (e) => {
+      const text = (e.clipboardData || window.clipboardData).getData("text");
+      if (text.length > 50) {
+        state.cheatingStats.pasteCount++;
+        state.cheatingStats.largePasteCount++;
+        state.cheatingStats.totalPastedChars += text.length;
+        logCheat("large_paste_input", `Pasted ${text.length} chars into discussion input`);
+      }
+    });
+  }
+}
+
+function startWebcamMonitor() {
+  const video = $("#webcamFeed");
+  const canvas = $("#captureCanvas");
+  if (!video || !canvas) return;
+
+  navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } })
+    .then((stream) => {
+      video.srcObject = stream;
+      video.play();
+      _webcamInterval = setInterval(() => captureAndAnalyzeFrame(video, canvas), 30000);
+    })
+    .catch(() => {
+      logCheat("webcam_denied", "Webcam access denied or unavailable");
+    });
+}
+
+function stopWebcamMonitor() {
+  if (_webcamInterval) {
+    clearInterval(_webcamInterval);
+    _webcamInterval = null;
+  }
+  const video = $("#webcamFeed");
+  if (video && video.srcObject) {
+    video.srcObject.getTracks().forEach((t) => t.stop());
+    video.srcObject = null;
+  }
+}
+
+async function captureAndAnalyzeFrame(video, canvas) {
+  if (!video.srcObject || video.readyState < 2) return;
+
+  canvas.width = 320;
+  canvas.height = 240;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(video, 0, 0, 320, 240);
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.6);
+
+  try {
+    const res = await fetch("/api/analyze-frame", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: dataUrl }),
+    });
+    if (!res.ok) return;
+
+    const flags = await res.json();
+    state.cheatingStats.webcamFramesAnalyzed++;
+
+    if (flags.lookingAway) {
+      state.cheatingStats.webcamConsecutiveLookAway++;
+      if (state.cheatingStats.webcamConsecutiveLookAway >= 3) {
+        state.cheatingStats.webcamFlags.lookingAway++;
+        logCheat("webcam_looking_away", "Candidate consistently looking away from screen (3+ consecutive checks)");
+        state.cheatingStats.webcamConsecutiveLookAway = 0;
+      }
+    } else {
+      state.cheatingStats.webcamConsecutiveLookAway = 0;
+    }
+    if (flags.multiplePeople) {
+      state.cheatingStats.webcamFlags.multiplePeople++;
+      logCheat("webcam_multiple_people", "Second person clearly visible in webcam frame");
+    }
+    if (flags.secondScreen) {
+      state.cheatingStats.webcamFlags.secondScreen++;
+      logCheat("webcam_second_screen", "Phone or second screen actively being used");
+    }
+  } catch {
+    // Silently fail — don't disrupt the interview
+  }
+}
+
+let _lastQuestionTime = null;
+
+function trackSpeechTiming_onQuestion() {
+  _lastQuestionTime = Date.now();
+}
+
+function trackSpeechTiming_onResponse() {
+  if (!_lastQuestionTime) return;
+  const elapsed = (Date.now() - _lastQuestionTime) / 1000;
+  state.cheatingStats.responseTimes.push(elapsed);
+
+  const times = state.cheatingStats.responseTimes;
+  state.cheatingStats.avgResponseTime = times.reduce((a, b) => a + b, 0) / times.length;
+
+  if (elapsed < 2 && state.messages.length > 6) {
+    state.cheatingStats.fastResponseCount++;
+    logCheat("fast_response", `Responded in ${elapsed.toFixed(1)}s to a complex question`);
+  }
+
+  if (elapsed > 120) {
+    state.cheatingStats.longSilenceCount++;
+    logCheat("long_silence", `${Math.floor(elapsed / 60)}min ${Math.floor(elapsed % 60)}s silence before responding`);
+  }
+
+  _lastQuestionTime = null;
+}
+
+function computeIntegrityScore() {
+  let score = 100;
+
+  // Tab-then-paste is the strongest cheating signal
+  score -= Math.min(state.cheatingStats.tabThenPasteCount * 15, 40);
+
+  // Large pastes without tab switch are suspicious but less damning
+  const purePastes = state.cheatingStats.largePasteCount - state.cheatingStats.tabThenPasteCount;
+  score -= Math.min(Math.max(0, purePastes) * 5, 15);
+
+  // Excessive tab switching (only if >3 times, normal people alt-tab occasionally)
+  const excessTabs = Math.max(0, state.cheatingStats.tabSwitchCount - 3);
+  score -= Math.min(excessTabs * 2, 10);
+
+  // Typing bursts
+  score -= Math.min(state.cheatingStats.burstCount * 3, 10);
+
+  // Webcam flags (conservative — only real confirmed flags get here)
+  score -= Math.min(state.cheatingStats.webcamFlags.lookingAway * 3, 10);
+  score -= state.cheatingStats.webcamFlags.multiplePeople * 12;
+  score -= state.cheatingStats.webcamFlags.secondScreen * 10;
+
+  // Fast responses (only flagged for <2s on complex questions)
+  score -= Math.min(state.cheatingStats.fastResponseCount * 3, 10);
+
+  // Long silences aren't cheating per se, but suspicious if combined with other signals
+  score -= Math.min(state.cheatingStats.longSilenceCount * 2, 6);
+
+  return Math.max(0, score);
+}
+
+function getIntegrityColor(score) {
+  if (score >= 80) return "green";
+  if (score >= 50) return "yellow";
+  return "red";
+}
+
+function generateHumanImpression() {
+  const h = state.sentimentHistory;
+  if (h.length === 0) return { vibe: "", observations: [] };
+
+  const avgConf = h.reduce((s, x) => s + x.confidence, 0) / h.length;
+  const avgStress = h.reduce((s, x) => s + x.stress, 0) / h.length;
+  const avgEng = h.reduce((s, x) => s + x.engagement, 0) / h.length;
+
+  const moods = h.map((x) => x.overall);
+  const moodCounts = {};
+  moods.forEach((m) => { moodCounts[m] = (moodCounts[m] || 0) + 1; });
+  const dominantMood = Object.entries(moodCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "neutral";
+
+  const earlyStress = h.slice(0, Math.ceil(h.length / 3));
+  const lateStress = h.slice(-Math.ceil(h.length / 3));
+  const earlyAvgStress = earlyStress.reduce((s, x) => s + x.stress, 0) / earlyStress.length;
+  const lateAvgStress = lateStress.reduce((s, x) => s + x.stress, 0) / lateStress.length;
+  const stressTrend = lateAvgStress - earlyAvgStress;
+
+  const earlyConf = earlyStress.reduce((s, x) => s + x.confidence, 0) / earlyStress.length;
+  const lateConf = lateStress.reduce((s, x) => s + x.confidence, 0) / lateStress.length;
+  const confTrend = lateConf - earlyConf;
+
+  const observations = [];
+  const name = state.candidateName.split(" ")[0];
+
+  const vibeMap = {
+    confident: `${name} came across as genuinely self-assured throughout the conversation. There was a natural ease in how they approached the problem.`,
+    enthusiastic: `${name} brought real energy to the interview. You could tell they were excited about the challenge and eager to dive in.`,
+    nervous: `${name} seemed a bit nervous at first, which is totally normal. What matters is how they worked through it.`,
+    stressed: `${name} appeared to feel the pressure during the interview. The stress was noticeable, but that doesn't necessarily reflect their day-to-day ability.`,
+    neutral: `${name} maintained a steady, composed presence throughout the interview. Professional and measured.`,
+  };
+  const vibe = vibeMap[dominantMood] || vibeMap.neutral;
+
+  if (avgConf > 0.7) {
+    observations.push("Showed strong confidence when explaining their thought process");
+  } else if (avgConf < 0.35) {
+    observations.push("Seemed unsure about their approach at times, hesitating before committing to ideas");
+  }
+
+  if (avgEng > 0.7) {
+    observations.push("Highly engaged — asked good questions and actively reasoned through the problem out loud");
+  } else if (avgEng < 0.35) {
+    observations.push("Could have been more engaged in the discussion — responses were sometimes minimal");
+  }
+
+  if (stressTrend < -0.15) {
+    observations.push("Settled in nicely as the interview progressed — stress levels dropped noticeably over time");
+  } else if (stressTrend > 0.15) {
+    observations.push("Stress seemed to build as the interview went on, possibly as the problem got harder");
+  }
+
+  if (confTrend > 0.15) {
+    observations.push("Grew more confident over time — warmed up to the problem and found their groove");
+  } else if (confTrend < -0.15) {
+    observations.push("Confidence dipped as the interview progressed — may have hit a wall on the harder parts");
+  }
+
+  if (avgStress < 0.25 && avgConf > 0.6) {
+    observations.push("Handled pressure really well — calm and collected even on tough questions");
+  }
+
+  if (avgEng > 0.6 && avgConf > 0.5) {
+    observations.push("Good communicator — thought out loud and kept the conversation flowing naturally");
+  }
+
+  const duration = state.seconds;
+  if (duration > 0) {
+    const mins = Math.floor(duration / 60);
+    if (mins >= 20) {
+      observations.push(`Spent a solid ${mins} minutes working through the problem — showed persistence`);
+    }
+  }
+
+  return { vibe, observations, avgConf, avgStress, avgEng, dominantMood };
+}
+
+function renderHumanImpression() {
+  const container = $("#impressionContent");
+  if (!container) return;
+
+  const imp = generateHumanImpression();
+  if (!imp.vibe) {
+    container.innerHTML = '<div class="impression-empty">Personality observations will appear after the interview.</div>';
+    return;
+  }
+
+  let html = `<div class="impression-vibe">${escapeHtml(imp.vibe)}</div>`;
+
+  if (imp.observations.length) {
+    html += '<div class="impression-observations">';
+    imp.observations.forEach((obs) => {
+      html += `<div class="impression-obs-item">${escapeHtml(obs)}</div>`;
+    });
+    html += "</div>";
+  }
+
+  const confPct = Math.round((imp.avgConf || 0) * 100);
+  const stressPct = Math.round((imp.avgStress || 0) * 100);
+  const engPct = Math.round((imp.avgEng || 0) * 100);
+
+  html += '<div class="impression-meters">';
+  html += `<div class="imp-meter"><span>Avg Confidence</span><div class="imp-bar"><div class="imp-fill imp-conf" style="width:${confPct}%"></div></div><span>${confPct}%</span></div>`;
+  html += `<div class="imp-meter"><span>Avg Stress</span><div class="imp-bar"><div class="imp-fill imp-stress" style="width:${stressPct}%"></div></div><span>${stressPct}%</span></div>`;
+  html += `<div class="imp-meter"><span>Avg Engagement</span><div class="imp-bar"><div class="imp-fill imp-eng" style="width:${engPct}%"></div></div><span>${engPct}%</span></div>`;
+  html += "</div>";
+
+  container.innerHTML = html;
+}
+
+function buildFullReportText(decision) {
+  const impression = generateHumanImpression();
+  const score = computeIntegrityScore();
+  const mins = Math.floor(state.seconds / 60);
+  const secs = state.seconds % 60;
+
+  let report = "";
+  report += "═══════════════════════════════════════════\n";
+  report += "          HIREAI INTERVIEW REPORT          \n";
+  report += "═══════════════════════════════════════════\n\n";
+
+  report += `Candidate:  ${state.candidateName}\n`;
+  report += `Position:   ${state.position}\n`;
+  report += `Date:       ${new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}\n`;
+  report += `Duration:   ${mins}m ${secs}s\n`;
+  report += `Language:   ${state.currentLanguage}\n\n`;
+
+  const verdictLabels = { strong_hire: "STRONG HIRE", hire: "HIRE", further_review: "FURTHER REVIEW", no_hire: "NO HIRE" };
+  report += `DECISION:   ${verdictLabels[decision.verdict] || decision.verdict}\n`;
+  report += `───────────────────────────────────────────\n`;
+  report += `${decision.summary || ""}\n\n`;
+
+  if (decision.scores) {
+    report += "SCORES\n";
+    const labels = { technical: "Technical", communication: "Communication", problemSolving: "Problem Solving", culturalFit: "Cultural Fit", experience: "Experience" };
+    for (const [k, v] of Object.entries(decision.scores)) {
+      const bar = "█".repeat(v) + "░".repeat(10 - v);
+      report += `  ${(labels[k] || k).padEnd(18)} ${bar} ${v}/10\n`;
+    }
+    report += "\n";
+  }
+
+  if (decision.strengths?.length) {
+    report += "STRENGTHS\n";
+    decision.strengths.forEach((s) => { report += `  + ${s}\n`; });
+    report += "\n";
+  }
+
+  if (decision.concerns?.length) {
+    report += "CONCERNS\n";
+    decision.concerns.forEach((c) => { report += `  - ${c}\n`; });
+    report += "\n";
+  }
+
+  report += "INTERVIEWER'S IMPRESSION\n";
+  report += `───────────────────────────────────────────\n`;
+  report += `${impression.vibe}\n\n`;
+  if (impression.observations.length) {
+    impression.observations.forEach((o) => { report += `  • ${o}\n`; });
+    report += "\n";
+  }
+
+  report += `INTEGRITY SCORE: ${score}/100\n`;
+  report += `───────────────────────────────────────────\n`;
+  const flaggedEvents = state.cheatingLog.filter((e) =>
+    ["tab_blocked", "tab_then_paste", "large_paste", "typing_burst",
+     "webcam_looking_away", "webcam_multiple_people", "webcam_second_screen",
+     "fast_response", "long_silence"].includes(e.type)
+  );
+  if (flaggedEvents.length === 0) {
+    report += "  No suspicious activity detected.\n\n";
+  } else {
+    flaggedEvents.forEach((e) => {
+      report += `  [${e.time}] ${e.type.replace(/_/g, " ")} — ${e.detail}\n`;
+    });
+    report += "\n";
+  }
+
+  if (state.notes.length) {
+    report += "ALL INTERVIEW NOTES\n";
+    report += `───────────────────────────────────────────\n`;
+    state.notes.forEach((n, i) => { report += `  ${i + 1}. ${n}\n`; });
+    report += "\n";
+  }
+
+  report += "═══════════════════════════════════════════\n";
+  report += "         Generated by HireAI Platform      \n";
+  report += "═══════════════════════════════════════════\n";
+
+  return report;
+}
+
+function downloadReport() {
+  const reportText = buildFullReportText(state._lastDecision || {});
+  const blob = new Blob([reportText], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const safeName = state.candidateName.replace(/[^a-zA-Z0-9]/g, "_");
+  a.download = `HireAI_Report_${safeName}_${new Date().toISOString().split("T")[0]}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function renderIntegrityReport() {
+  const score = computeIntegrityScore();
+  const color = getIntegrityColor(score);
+
+  const scoreEl = $("#integrityScore");
+  const detailsEl = $("#integrityDetails");
+  if (!scoreEl || !detailsEl) return;
+
+  scoreEl.textContent = score;
+  scoreEl.className = `integrity-score-value integrity-${color}`;
+
+  const cheatingEvents = state.cheatingLog.filter((e) =>
+    ["tab_blocked", "tab_then_paste", "large_paste", "large_paste_input", "typing_burst",
+     "webcam_looking_away", "webcam_multiple_people", "webcam_second_screen",
+     "fast_response", "long_silence", "webcam_denied"].includes(e.type)
+  );
+
+  if (cheatingEvents.length === 0) {
+    detailsEl.innerHTML = '<div class="integrity-clean">No suspicious activity detected.</div>';
+    return;
+  }
+
+  const severityMap = {
+    tab_blocked: "medium",
+    tab_then_paste: "high",
+    large_paste: "medium", large_paste_input: "medium",
+    typing_burst: "medium",
+    webcam_looking_away: "medium",
+    webcam_multiple_people: "high", webcam_second_screen: "high",
+    fast_response: "low", long_silence: "low", webcam_denied: "low",
+  };
+
+  detailsEl.innerHTML = "";
+  const summary = document.createElement("div");
+  summary.className = "integrity-summary";
+  const webcamTotal = state.cheatingStats.webcamFlags.lookingAway + state.cheatingStats.webcamFlags.multiplePeople + state.cheatingStats.webcamFlags.secondScreen;
+  summary.innerHTML =
+    (state.cheatingStats.tabThenPasteCount > 0 ? `<span class="stat-alert">Copy from external: <b>${state.cheatingStats.tabThenPasteCount}</b></span>` : "") +
+    `<span>Tab switches: <b>${state.cheatingStats.tabSwitchCount}</b></span>` +
+    `<span>Large pastes: <b>${state.cheatingStats.largePasteCount}</b></span>` +
+    `<span>Typing bursts: <b>${state.cheatingStats.burstCount}</b></span>` +
+    (webcamTotal > 0 ? `<span>Webcam flags: <b>${webcamTotal}</b></span>` : "") +
+    (state.cheatingStats.fastResponseCount > 0 ? `<span>Fast responses: <b>${state.cheatingStats.fastResponseCount}</b></span>` : "") +
+    (state.cheatingStats.longSilenceCount > 0 ? `<span>Long silences: <b>${state.cheatingStats.longSilenceCount}</b></span>` : "");
+  detailsEl.appendChild(summary);
+
+  cheatingEvents.forEach((evt) => {
+    const item = document.createElement("div");
+    item.className = `integrity-event severity-${severityMap[evt.type] || "low"}`;
+    item.innerHTML = `<span class="event-time">${evt.time}</span><span class="event-type">${evt.type.replace(/_/g, " ")}</span><span class="event-detail">${escapeHtml(evt.detail)}</span>`;
+    detailsEl.appendChild(item);
+  });
 }
 
 // ==================== EVENT LISTENERS ====================
 document.addEventListener("DOMContentLoaded", () => {
   initMonaco();
   initVoice();
+  attachGlobalPasteDetector();
 
   // Landing form
   $("#setupForm").addEventListener("submit", (e) => {
@@ -703,6 +1312,7 @@ document.addEventListener("DOMContentLoaded", () => {
     $("#headerPosition").textContent = state.position;
     showPage("interview");
     startTimer();
+    initCheatingDetection();
     startInterview();
   });
 

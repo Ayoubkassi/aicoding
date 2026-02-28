@@ -1,4 +1,7 @@
 import os
+import json
+import re
+import shutil
 import subprocess
 import tempfile
 from flask import Flask, request, jsonify, send_from_directory, Response
@@ -75,6 +78,80 @@ def tts():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/analyze-frame", methods=["POST"])
+def analyze_frame():
+    global client
+    if not api_key or api_key == "your_mistral_api_key_here":
+        return jsonify({"error": "Set MISTRAL_API_KEY in .env file"}), 500
+
+    if client is None:
+        client = Mistral(api_key=api_key)
+
+    data = request.json
+    image_b64 = data.get("image", "")
+    if not image_b64:
+        return jsonify({"error": "No image provided"}), 400
+
+    if not image_b64.startswith("data:"):
+        image_b64 = f"data:image/jpeg;base64,{image_b64}"
+
+    try:
+        response = client.chat.complete(
+            model="mistral-large-2512",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "You are analyzing a webcam frame from a coding interview. "
+                                "Be VERY conservative — only flag something if you are highly confident.\n\n"
+                                "IMPORTANT RULES:\n"
+                                "- A person glancing slightly to the side, reading their code editor, or looking at their keyboard is NORMAL. Do NOT flag this.\n"
+                                "- 'lookingAway' means the person has their head clearly turned away from the screen for an extended period (e.g. reading from a paper, talking to someone off-camera). Brief glances are NOT looking away.\n"
+                                "- 'multiplePeople' means you can CLEARLY see a second distinct human face or body in the frame. Posters, photos on walls, reflections, or shadows do NOT count.\n"
+                                "- 'secondScreen' means you can clearly see a phone, tablet, or second monitor being actively used. A phone lying flat on a desk or a monitor that's off does NOT count.\n\n"
+                                "Return ONLY valid JSON:\n"
+                                '{"lookingAway": false, "multiplePeople": false, "secondScreen": false, "confidence": 0.0}\n'
+                                "- Set confidence (0.0-1.0) for how certain you are about ANY flag being true.\n"
+                                "- Default everything to false. Only set true if you are >90% certain.\n"
+                                "- When in doubt, return all false. False negatives are much better than false positives."
+                            ),
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": image_b64,
+                        },
+                    ],
+                }
+            ],
+            temperature=0.0,
+            max_tokens=150,
+            response_format={"type": "json_object"},
+        )
+        content = response.choices[0].message.content
+        try:
+            result = json.loads(content)
+        except json.JSONDecodeError:
+            result = {"lookingAway": False, "multiplePeople": False, "secondScreen": False, "confidence": 0.0}
+
+        confidence = float(result.get("confidence", 0.0))
+        if confidence < 0.85:
+            result["lookingAway"] = False
+            result["multiplePeople"] = False
+            result["secondScreen"] = False
+
+        result.setdefault("lookingAway", False)
+        result.setdefault("multiplePeople", False)
+        result.setdefault("secondScreen", False)
+        result["confidence"] = confidence
+
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/run", methods=["POST"])
 def run_code():
     data = request.json
@@ -87,11 +164,37 @@ def run_code():
         "c": ".c",
         "cpp": ".cpp",
         "go": ".go",
+        "java": ".java",
     }
 
     suffix = suffixes.get(language, ".txt")
 
     try:
+        if language == "java":
+            match = re.search(r"public\s+class\s+(\w+)", code)
+            class_name = match.group(1) if match else "Main"
+
+            tmpdir = tempfile.mkdtemp()
+            java_file = os.path.join(tmpdir, f"{class_name}.java")
+            with open(java_file, "w") as f:
+                f.write(code)
+
+            comp = subprocess.run(
+                ["javac", java_file],
+                capture_output=True, text=True, timeout=15,
+            )
+            if comp.returncode != 0:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                return jsonify({"output": "Compilation Error:\n" + comp.stderr})
+
+            result = subprocess.run(
+                ["java", "-cp", tmpdir, class_name],
+                capture_output=True, text=True, timeout=10,
+            )
+            output = result.stdout + result.stderr
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return jsonify({"output": output or "(no output)"})
+
         tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=suffix, delete=False, dir=tempfile.gettempdir()
         )

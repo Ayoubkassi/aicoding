@@ -230,14 +230,47 @@
           <h3>Concerns</h3>
           <ul id="concernsList"></ul>
         </div>
+        <div class="decision-card full-width impression-card">
+          <h3>Interviewer's Impression</h3>
+          <div id="impressionContent" class="impression-content"></div>
+        </div>
+        <div class="decision-card full-width">
+          <h3>Integrity Report</h3>
+          <div class="integrity-report">
+            <div class="integrity-score-container">
+              <div class="integrity-score-label">Integrity Score</div>
+              <div id="integrityScore" class="integrity-score-value">—</div>
+            </div>
+            <div id="integrityDetails" class="integrity-details"></div>
+          </div>
+        </div>
         <div class="decision-card full-width">
           <h3>All Interview Notes</h3>
           <div id="fullNotes" class="full-notes"></div>
         </div>
       </div>
-      <button class="btn-primary" onclick="location.reload()">New Interview</button>
+      <div class="decision-actions">
+        <button class="btn-download" id="downloadReportBtn">
+          <svg viewBox="0 0 24 24" fill="none" width="16" height="16"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Save Report
+        </button>
+        <button class="btn-primary" onclick="location.reload()">New Interview</button>
+      </div>
     </div>
   </section>
+
+  <!-- Tab switch warning overlay -->
+  <div id="tabBlockOverlay" class="tab-block-overlay">
+    <div class="tab-block-content">
+      <div class="tab-block-icon">&#9888;</div>
+      <h2>Tab Switching is Restricted</h2>
+      <p>Leaving this tab during the interview is not allowed and has been recorded.</p>
+    </div>
+  </div>
+
+  <!-- Hidden elements for cheating detection -->
+  <video id="webcamFeed" style="display:none" muted playsinline></video>
+  <canvas id="captureCanvas" style="display:none"></canvas>
 
   <!-- Monaco Editor from CDN -->
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
