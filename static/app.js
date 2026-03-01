@@ -104,7 +104,6 @@ function initMonaco() {
     });
     attachMonacoDetectors(state.editor);
 
-    // Block paste: override Monaco's built-in paste action
     state.editor.addAction({
       id: "block-paste",
       label: "Block Paste",
@@ -120,7 +119,6 @@ function initMonaco() {
       },
     });
 
-    // Also block the DOM paste event (right-click paste, etc.)
     state.editor.getDomNode().addEventListener("paste", (e) => {
       if (_programmaticEdit) return;
       e.preventDefault();
@@ -169,7 +167,6 @@ async function runCode() {
     output.textContent = result;
   }
 
-  // Auto-send code + output to AI so it can review
   if (state.messages.length > 1 && !state.isWaiting) {
     if (recognition) try { recognition.stop(); } catch {}
     const autoMsg = `[CODE RUN — ${state.currentLanguage}]\nCode:\n\`\`\`\n${code}\n\`\`\`\nOutput:\n\`\`\`\n${result}\n\`\`\``;
@@ -201,6 +198,14 @@ CONTEXT:
 - The candidate has a live code editor on the left (60% of screen). They write and run code there.
 - You can put code in their editor using the "code" field (ONLY for the initial template).
 - You can switch the editor language using the "language" field.
+
+PERSONALITY — SOUND HUMAN:
+- Sound like a real person. Use natural filler words occasionally: "hmm", "right", "gotcha", "okay so...", "yeah". Don't overdo it — just enough to feel natural.
+- React to answers with brief, genuine acknowledgments before your next question: "Good point", "That's a solid answer", "Interesting take", "Yeah, exactly".
+- If the candidate gives a great answer, show enthusiasm: "Nice, I like that." If they seem unsure, be encouraging: "That's okay, take your time."
+- Adapt your tone to the candidate's emotional state from the sentiment data. If stress is high, be warmer and calmer. If engagement is high, match their energy.
+- Never sound robotic or formulaic. Vary your sentence structure. Don't start every response with "Great" or "Okay".
+- If the candidate interrupts you mid-sentence (marked with [SYSTEM: Candidate interrupted]), acknowledge naturally and address what they said. Don't repeat yourself.
 
 YOUR ROLE — EVALUATOR, NOT HELPER:
 - You are here to ASSESS the candidate, not to help them pass.
@@ -241,12 +246,17 @@ LANGUAGE SWITCHING:
 - JAVA SPECIFIC: Always use "public class Main" as the class name. Always include "import java.util.*;" at the top. The file is compiled as Main.java.
 
 INTERVIEW FLOW:
-1. INTRO (1 message, combine with step 2!) — Brief "Hi, let's get started." + present the problem immediately.
-2. PROBLEM — Present ONE coding problem appropriate for "${state.position}". Include:
+1. INTRO — Start with a warm, casual greeting. Ask how they're doing today. Mention you'll be interviewing them for the ${state.position} role. Keep it brief and friendly (1-2 sentences). Wait for their response before moving on.
+2. WARMUP — After the small talk, transition into a brief technical warmup. Ask 5-6 general knowledge questions appropriate for the "${state.position}" position and the job description. These are NOT coding questions — they are conceptual/experience questions that test foundational knowledge. Examples:
+   - For a Java engineer: "What's the difference between an abstract class and an interface?", "How does garbage collection work in Java?"
+   - For an ML engineer: "Can you explain the bias-variance tradeoff?", "When would you use L1 vs L2 regularization?"
+   - For a frontend engineer: "How does the event loop work in JavaScript?", "What's the difference between CSS Grid and Flexbox?"
+   Ask ONE question at a time, wait for the candidate's answer, react naturally ("Good point", "Interesting", "Right, exactly"), then ask the next. After 5-6 questions, transition naturally: "Alright, nice — let's move on to a coding challenge." Take notes on every answer.
+3. PROBLEM — Present ONE coding problem appropriate for "${state.position}". Include:
    - Clear problem statement
    - 2-3 input/output examples (described verbally in "message")
    - Put ONLY a minimal skeleton in "code" (function signature + example calls, NO solution logic)
-3. CODING — The main phase (most time here). Your job is to OBSERVE SILENTLY and only respond at key moments:
+4. CODING — The main phase (most time here). Your job is to OBSERVE SILENTLY and only respond at key moments:
    - LET THE CANDIDATE WORK IN PEACE. Do NOT respond to every message. Stay silent while they code.
    - [CODE RUN] with output: NOW you engage. Ask "Are you sure about this?" or "Do you think your code will work for all cases?" Don't tell them if it's right or wrong.
    - [CODE SHARED]: Review their code. If bugs exist, ask: "What do you think happens with edge inputs?" If it works: "Can you propose a few more test cases to make sure?"
@@ -254,8 +264,8 @@ INTERVIEW FLOW:
    - If code works correctly: Ask about time/space complexity, then challenge them: "Can you optimize this?" or give a follow-up variation.
    - Always push them to TEST MORE: "What other inputs would you try?" "What's the worst case?"
    - TAKE NOTES on everything: approach, mistakes, how they debug, communication, speed.
-4. REVIEW — Quick summary of how they did
-5. DECISION — Only when told to end
+5. REVIEW — Quick summary of how they did
+6. DECISION — Only when told to end
 
 RESPONSE FORMAT — Always valid JSON:
 {
@@ -269,7 +279,7 @@ RESPONSE FORMAT — Always valid JSON:
     "engagement": 0.0-1.0
   },
   "notes": ["observation 1", "observation 2"],
-  "phase": "intro" | "problem" | "coding" | "review" | "decision",
+  "phase": "intro" | "warmup" | "problem" | "coding" | "review" | "decision",
   "decision": null
 }
 
@@ -340,7 +350,6 @@ function addDiscussionEntry(text, sender) {
 
   container.appendChild(entry);
   container.scrollTop = container.scrollHeight;
-
 }
 
 function escapeHtml(s) {
@@ -400,7 +409,7 @@ function updatePhase(phase) {
   if (cur) cur.classList.add("active");
 
   const labels = {
-    intro: "Intro", problem: "Problem",
+    intro: "Intro", warmup: "Warmup", problem: "Problem",
     coding: "Coding", review: "Review",
     decision: "Decision",
   };
@@ -420,6 +429,7 @@ let isRecording = false;
 let finalTranscript = "";
 let silenceTimer = null;
 let _micCooldownUntil = 0;
+let _bargeInCooldown = 0;
 
 function initVoice() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -444,6 +454,9 @@ function initVoice() {
         interim += t;
       }
     }
+
+    if (isSpeaking) return;
+
     $("#discussionInput").value = (finalTranscript + interim).trim();
 
     clearTimeout(silenceTimer);
@@ -482,6 +495,14 @@ function initVoice() {
 
 function toggleMic() {
   if (!recognition) return;
+  // Click-to-interrupt: if AI is speaking, stop audio and resume mic
+  if (isSpeaking) {
+    if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+    isSpeaking = false;
+    if (_speakResolve) _speakResolve();
+    resumeMicIfActive();
+    return;
+  }
   if (isRecording) {
     muteMic();
   } else {
@@ -515,6 +536,7 @@ function muteMic() {
 
 let currentAudio = null;
 let isSpeaking = false;
+let _speakResolve = null;
 
 function resumeMicIfActive() {
   if (isRecording && recognition && !isSpeaking) {
@@ -526,17 +548,17 @@ function resumeMicIfActive() {
     }, 1000);
   }
 }
-  
+
 async function speakText(text) {
   if (!text) return resumeMicIfActive();
 
   isSpeaking = true;
-  if (recognition) try { recognition.stop(); } catch {};
   clearTimeout(silenceTimer);
   finalTranscript = "";
   $("#discussionInput").value = "";
 
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  if (recognition) try { recognition.stop(); } catch {}
 
   try {
     const res = await fetch("/api/tts", {
@@ -552,13 +574,15 @@ async function speakText(text) {
     currentAudio = new Audio(url);
 
     await new Promise((resolve) => {
+      _speakResolve = resolve;
       currentAudio.onended = () => { URL.revokeObjectURL(url); resolve(); };
       currentAudio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
       currentAudio.play().catch(resolve);
     });
   } catch {
-    // Silently fail — don't block the interview
+    // Silently fail
   } finally {
+    _speakResolve = null;
     if (isSpeaking) {
       currentAudio = null;
       isSpeaking = false;
@@ -575,7 +599,6 @@ async function handleAIResponse(aiData) {
   addNotes(aiData.notes);
   updatePhase(aiData.phase);
 
-  // Language switch — update dropdown, editor syntax, and compiler target
   if (aiData.language && aiData.language !== state.currentLanguage) {
     const lang = aiData.language;
     state.currentLanguage = lang;
@@ -588,7 +611,6 @@ async function handleAIResponse(aiData) {
     addDiscussionEntry(`(Switched to ${lang})`, "ai");
   }
 
-  // Inject code into editor if AI provided it (only for templates)
   if (aiData.code && state.editor) {
     _programmaticEdit = true;
     state.editor.setValue(aiData.code);
@@ -596,7 +618,6 @@ async function handleAIResponse(aiData) {
     addDiscussionEntry("(Code loaded into editor)", "ai");
   }
 
-  // Speak with ElevenLabs — awaits until audio finishes, then mic resumes
   if (aiData.message && !aiData.message.startsWith("(")) {
     await speakText(aiData.message);
   } else {
@@ -614,7 +635,6 @@ async function sendMessage(text) {
 
   trackSpeechTiming_onResponse();
 
-  // Stop recognition during API call + TTS (speakText will resume it after)
   if (recognition) try { recognition.stop(); } catch {}
 
   state.messages.push({ role: "user", content: text });
@@ -662,11 +682,10 @@ async function shareCode() {
 async function startInterview() {
   state.messages = [{ role: "system", content: buildSystemPrompt() }];
 
-  const kickoff = `[SYSTEM: The candidate just joined. Give a brief 1-2 sentence welcome, mention the position, then immediately present the coding problem with examples in ${state.currentLanguage}. Do NOT ask them to introduce themselves. Get straight to the problem.]`;
+  const kickoff = `[SYSTEM: The candidate just joined. Start with a warm, casual ice-breaker — greet them by name, ask how they're doing today, and mention you'll be interviewing them for the ${state.position} role. Keep it brief and friendly (1-2 sentences). Do NOT present the coding problem yet — wait for their response first, then begin the warmup questions.]`;
   state.messages.push({ role: "user", content: kickoff });
 
   setWaiting(true);
-  // Auto-activate mic from the start — speakText will pause/resume it around AI audio
   if (recognition) unmuteMic();
 
   try {
@@ -722,10 +741,10 @@ function showDecision(d) {
   $("#decisionMeta").textContent = `${state.candidateName} — ${state.position} — Duration: ${$("#timer").textContent}`;
 
   const map = {
-    strong_hire: { icon: "✅", text: "Strong Hire", cls: "strong_hire" },
-    hire: { icon: "👍", text: "Hire", cls: "hire" },
-    further_review: { icon: "🔄", text: "Further Review", cls: "further_review" },
-    no_hire: { icon: "❌", text: "No Hire", cls: "no_hire" },
+    strong_hire: { icon: "\u2705", text: "Strong Hire", cls: "strong_hire" },
+    hire: { icon: "\uD83D\uDC4D", text: "Hire", cls: "hire" },
+    further_review: { icon: "\uD83D\uDD04", text: "Further Review", cls: "further_review" },
+    no_hire: { icon: "\u274C", text: "No Hire", cls: "no_hire" },
   };
 
   const v = map[d.verdict] || map.further_review;
@@ -780,6 +799,9 @@ function showDecision(d) {
 
   const dlBtn = $("#downloadReportBtn");
   if (dlBtn) dlBtn.addEventListener("click", downloadReport);
+
+  const dlTranscript = $("#downloadTranscriptBtn");
+  if (dlTranscript) dlTranscript.addEventListener("click", downloadTranscript);
 }
 
 // ==================== CHEATING DETECTION ====================
@@ -889,9 +911,7 @@ function attachMonacoDetectors(editor) {
   });
 
   editor.onDidChangeModelContent((e) => {
-    // Skip programmatic changes (setValue, language switch, AI code load)
     if (_programmaticEdit || e.isFlush) return;
-    // Skip undo/redo operations
     if (e.isUndoing || e.isRedoing) return;
 
     const now = Date.now();
@@ -900,7 +920,6 @@ function attachMonacoDetectors(editor) {
       charsAdded += change.text.length;
     }
 
-    // Multi-line editor operations (uncomment, format, etc.) produce many small changes at once — skip them
     if (e.changes.length > 5) return;
 
     state.cheatingStats.totalKeystrokes++;
@@ -999,7 +1018,7 @@ async function captureAndAnalyzeFrame(video, canvas) {
       logCheat("webcam_second_screen", "Phone or second screen actively being used");
     }
   } catch {
-    // Silently fail — don't disrupt the interview
+    // Silently fail
   }
 }
 
@@ -1032,35 +1051,18 @@ function trackSpeechTiming_onResponse() {
 
 function computeIntegrityScore() {
   let score = 100;
-
-  // Paste attempts (blocked) are a strong signal
   score -= Math.min(state.cheatingStats.pasteCount * 10, 30);
-
-  // Tab-then-paste is the strongest cheating signal
   score -= Math.min(state.cheatingStats.tabThenPasteCount * 15, 40);
-
-  // Large pastes without tab switch are suspicious but less damning
   const purePastes = state.cheatingStats.largePasteCount - state.cheatingStats.tabThenPasteCount;
   score -= Math.min(Math.max(0, purePastes) * 5, 15);
-
-  // Excessive tab switching (only if >3 times, normal people alt-tab occasionally)
   const excessTabs = Math.max(0, state.cheatingStats.tabSwitchCount - 3);
   score -= Math.min(excessTabs * 2, 10);
-
-  // Typing bursts
   score -= Math.min(state.cheatingStats.burstCount * 3, 10);
-
-  // Webcam flags (conservative — only real confirmed flags get here)
   score -= Math.min(state.cheatingStats.webcamFlags.lookingAway * 3, 10);
   score -= state.cheatingStats.webcamFlags.multiplePeople * 12;
   score -= state.cheatingStats.webcamFlags.secondScreen * 10;
-
-  // Fast responses (only flagged for <2s on complex questions)
   score -= Math.min(state.cheatingStats.fastResponseCount * 3, 10);
-
-  // Long silences aren't cheating per se, but suspicious if combined with other signals
   score -= Math.min(state.cheatingStats.longSilenceCount * 2, 6);
-
   return Math.max(0, score);
 }
 
@@ -1105,44 +1107,21 @@ function generateHumanImpression() {
   };
   const vibe = vibeMap[dominantMood] || vibeMap.neutral;
 
-  if (avgConf > 0.7) {
-    observations.push("Showed strong confidence when explaining their thought process");
-  } else if (avgConf < 0.35) {
-    observations.push("Seemed unsure about their approach at times, hesitating before committing to ideas");
-  }
-
-  if (avgEng > 0.7) {
-    observations.push("Highly engaged — asked good questions and actively reasoned through the problem out loud");
-  } else if (avgEng < 0.35) {
-    observations.push("Could have been more engaged in the discussion — responses were sometimes minimal");
-  }
-
-  if (stressTrend < -0.15) {
-    observations.push("Settled in nicely as the interview progressed — stress levels dropped noticeably over time");
-  } else if (stressTrend > 0.15) {
-    observations.push("Stress seemed to build as the interview went on, possibly as the problem got harder");
-  }
-
-  if (confTrend > 0.15) {
-    observations.push("Grew more confident over time — warmed up to the problem and found their groove");
-  } else if (confTrend < -0.15) {
-    observations.push("Confidence dipped as the interview progressed — may have hit a wall on the harder parts");
-  }
-
-  if (avgStress < 0.25 && avgConf > 0.6) {
-    observations.push("Handled pressure really well — calm and collected even on tough questions");
-  }
-
-  if (avgEng > 0.6 && avgConf > 0.5) {
-    observations.push("Good communicator — thought out loud and kept the conversation flowing naturally");
-  }
+  if (avgConf > 0.7) observations.push("Showed strong confidence when explaining their thought process");
+  else if (avgConf < 0.35) observations.push("Seemed unsure about their approach at times, hesitating before committing to ideas");
+  if (avgEng > 0.7) observations.push("Highly engaged \u2014 asked good questions and actively reasoned through the problem out loud");
+  else if (avgEng < 0.35) observations.push("Could have been more engaged in the discussion \u2014 responses were sometimes minimal");
+  if (stressTrend < -0.15) observations.push("Settled in nicely as the interview progressed \u2014 stress levels dropped noticeably over time");
+  else if (stressTrend > 0.15) observations.push("Stress seemed to build as the interview went on, possibly as the problem got harder");
+  if (confTrend > 0.15) observations.push("Grew more confident over time \u2014 warmed up to the problem and found their groove");
+  else if (confTrend < -0.15) observations.push("Confidence dipped as the interview progressed \u2014 may have hit a wall on the harder parts");
+  if (avgStress < 0.25 && avgConf > 0.6) observations.push("Handled pressure really well \u2014 calm and collected even on tough questions");
+  if (avgEng > 0.6 && avgConf > 0.5) observations.push("Good communicator \u2014 thought out loud and kept the conversation flowing naturally");
 
   const duration = state.seconds;
   if (duration > 0) {
     const mins = Math.floor(duration / 60);
-    if (mins >= 20) {
-      observations.push(`Spent a solid ${mins} minutes working through the problem — showed persistence`);
-    }
+    if (mins >= 20) observations.push(`Spent a solid ${mins} minutes working through the problem \u2014 showed persistence`);
   }
 
   return { vibe, observations, avgConf, avgStress, avgEng, dominantMood };
@@ -1151,33 +1130,25 @@ function generateHumanImpression() {
 function renderHumanImpression() {
   const container = $("#impressionContent");
   if (!container) return;
-
   const imp = generateHumanImpression();
   if (!imp.vibe) {
     container.innerHTML = '<div class="impression-empty">Personality observations will appear after the interview.</div>';
     return;
   }
-
   let html = `<div class="impression-vibe">${escapeHtml(imp.vibe)}</div>`;
-
   if (imp.observations.length) {
     html += '<div class="impression-observations">';
-    imp.observations.forEach((obs) => {
-      html += `<div class="impression-obs-item">${escapeHtml(obs)}</div>`;
-    });
+    imp.observations.forEach((obs) => { html += `<div class="impression-obs-item">${escapeHtml(obs)}</div>`; });
     html += "</div>";
   }
-
   const confPct = Math.round((imp.avgConf || 0) * 100);
   const stressPct = Math.round((imp.avgStress || 0) * 100);
   const engPct = Math.round((imp.avgEng || 0) * 100);
-
   html += '<div class="impression-meters">';
   html += `<div class="imp-meter"><span>Avg Confidence</span><div class="imp-bar"><div class="imp-fill imp-conf" style="width:${confPct}%"></div></div><span>${confPct}%</span></div>`;
   html += `<div class="imp-meter"><span>Avg Stress</span><div class="imp-bar"><div class="imp-fill imp-stress" style="width:${stressPct}%"></div></div><span>${stressPct}%</span></div>`;
   html += `<div class="imp-meter"><span>Avg Engagement</span><div class="imp-bar"><div class="imp-fill imp-eng" style="width:${engPct}%"></div></div><span>${engPct}%</span></div>`;
   html += "</div>";
-
   container.innerHTML = html;
 }
 
@@ -1186,55 +1157,47 @@ function buildFullReportText(decision) {
   const score = computeIntegrityScore();
   const mins = Math.floor(state.seconds / 60);
   const secs = state.seconds % 60;
-
   let report = "";
-  report += "═══════════════════════════════════════════\n";
+  report += "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n";
   report += "          HIREAI INTERVIEW REPORT          \n";
-  report += "═══════════════════════════════════════════\n\n";
-
+  report += "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n\n";
   report += `Candidate:  ${state.candidateName}\n`;
   report += `Position:   ${state.position}\n`;
   report += `Date:       ${new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}\n`;
   report += `Duration:   ${mins}m ${secs}s\n`;
   report += `Language:   ${state.currentLanguage}\n\n`;
-
   const verdictLabels = { strong_hire: "STRONG HIRE", hire: "HIRE", further_review: "FURTHER REVIEW", no_hire: "NO HIRE" };
   report += `DECISION:   ${verdictLabels[decision.verdict] || decision.verdict}\n`;
-  report += `───────────────────────────────────────────\n`;
+  report += "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n";
   report += `${decision.summary || ""}\n\n`;
-
   if (decision.scores) {
     report += "SCORES\n";
     const labels = { technical: "Technical", communication: "Communication", problemSolving: "Problem Solving", culturalFit: "Cultural Fit", experience: "Experience" };
     for (const [k, v] of Object.entries(decision.scores)) {
-      const bar = "█".repeat(v) + "░".repeat(10 - v);
+      const bar = "\u2588".repeat(v) + "\u2591".repeat(10 - v);
       report += `  ${(labels[k] || k).padEnd(18)} ${bar} ${v}/10\n`;
     }
     report += "\n";
   }
-
   if (decision.strengths?.length) {
     report += "STRENGTHS\n";
     decision.strengths.forEach((s) => { report += `  + ${s}\n`; });
     report += "\n";
   }
-
   if (decision.concerns?.length) {
     report += "CONCERNS\n";
     decision.concerns.forEach((c) => { report += `  - ${c}\n`; });
     report += "\n";
   }
-
   report += "INTERVIEWER'S IMPRESSION\n";
-  report += `───────────────────────────────────────────\n`;
+  report += "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n";
   report += `${impression.vibe}\n\n`;
   if (impression.observations.length) {
-    impression.observations.forEach((o) => { report += `  • ${o}\n`; });
+    impression.observations.forEach((o) => { report += `  \u2022 ${o}\n`; });
     report += "\n";
   }
-
   report += `INTEGRITY SCORE: ${score}/100\n`;
-  report += `───────────────────────────────────────────\n`;
+  report += "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n";
   const flaggedEvents = state.cheatingLog.filter((e) =>
     ["tab_blocked", "paste_blocked", "tab_then_paste", "large_paste", "typing_burst",
      "webcam_looking_away", "webcam_multiple_people", "webcam_second_screen",
@@ -1244,22 +1207,19 @@ function buildFullReportText(decision) {
     report += "  No suspicious activity detected.\n\n";
   } else {
     flaggedEvents.forEach((e) => {
-      report += `  [${e.time}] ${e.type.replace(/_/g, " ")} — ${e.detail}\n`;
+      report += `  [${e.time}] ${e.type.replace(/_/g, " ")} \u2014 ${e.detail}\n`;
     });
     report += "\n";
   }
-
   if (state.notes.length) {
     report += "ALL INTERVIEW NOTES\n";
-    report += `───────────────────────────────────────────\n`;
+    report += "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n";
     state.notes.forEach((n, i) => { report += `  ${i + 1}. ${n}\n`; });
     report += "\n";
   }
-
-  report += "═══════════════════════════════════════════\n";
+  report += "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n";
   report += "         Generated by HireAI Platform      \n";
-  report += "═══════════════════════════════════════════\n";
-
+  report += "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n";
   return report;
 }
 
@@ -1280,36 +1240,26 @@ function downloadReport() {
 function renderIntegrityReport() {
   const score = computeIntegrityScore();
   const color = getIntegrityColor(score);
-
   const scoreEl = $("#integrityScore");
   const detailsEl = $("#integrityDetails");
   if (!scoreEl || !detailsEl) return;
-
   scoreEl.textContent = score;
   scoreEl.className = `integrity-score-value integrity-${color}`;
-
   const cheatingEvents = state.cheatingLog.filter((e) =>
     ["tab_blocked", "paste_blocked", "tab_then_paste", "large_paste", "large_paste_input", "typing_burst",
      "webcam_looking_away", "webcam_multiple_people", "webcam_second_screen",
      "fast_response", "long_silence", "webcam_denied"].includes(e.type)
   );
-
   if (cheatingEvents.length === 0) {
     detailsEl.innerHTML = '<div class="integrity-clean">No suspicious activity detected.</div>';
     return;
   }
-
   const severityMap = {
-    tab_blocked: "medium",
-    paste_blocked: "high",
-    tab_then_paste: "high",
-    large_paste: "medium", large_paste_input: "medium",
-    typing_burst: "medium",
-    webcam_looking_away: "medium",
-    webcam_multiple_people: "high", webcam_second_screen: "high",
+    tab_blocked: "medium", paste_blocked: "high", tab_then_paste: "high",
+    large_paste: "medium", large_paste_input: "medium", typing_burst: "medium",
+    webcam_looking_away: "medium", webcam_multiple_people: "high", webcam_second_screen: "high",
     fast_response: "low", long_silence: "low", webcam_denied: "low",
   };
-
   detailsEl.innerHTML = "";
   const summary = document.createElement("div");
   summary.className = "integrity-summary";
@@ -1323,7 +1273,6 @@ function renderIntegrityReport() {
     (state.cheatingStats.fastResponseCount > 0 ? `<span>Fast responses: <b>${state.cheatingStats.fastResponseCount}</b></span>` : "") +
     (state.cheatingStats.longSilenceCount > 0 ? `<span>Long silences: <b>${state.cheatingStats.longSilenceCount}</b></span>` : "");
   detailsEl.appendChild(summary);
-
   cheatingEvents.forEach((evt) => {
     const item = document.createElement("div");
     item.className = `integrity-event severity-${severityMap[evt.type] || "low"}`;
@@ -1338,14 +1287,12 @@ document.addEventListener("DOMContentLoaded", () => {
   initVoice();
   attachGlobalPasteDetector();
 
-  // Landing form
   $("#setupForm").addEventListener("submit", (e) => {
     e.preventDefault();
     state.candidateName = $("#candidateName").value.trim();
     state.position = $("#position").value.trim();
     state.jobDescription = $("#jobDescription").value.trim();
     if (!state.candidateName || !state.position) return;
-
     state.currentLanguage = $("#languageSelect").value;
     $("#headerPosition").textContent = state.position;
     showPage("interview");
@@ -1354,13 +1301,11 @@ document.addEventListener("DOMContentLoaded", () => {
     startInterview();
   });
 
-  // Discussion send
   $("#discussionForm").addEventListener("submit", (e) => {
     e.preventDefault();
     sendMessage($("#discussionInput").value.trim());
   });
 
-  // Language change — also tell the AI
   $("#languageSelect").addEventListener("change", (e) => {
     changeLanguage(e.target.value);
     if (state.messages.length > 1) {
@@ -1371,32 +1316,20 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Run code
   $("#runCodeBtn").addEventListener("click", runCode);
-
-  // Clear console
-  $("#clearConsoleBtn").addEventListener("click", () => {
-    $("#consoleOutput").textContent = "Ready.";
-  });
-
-  // Share code with AI
+  $("#clearConsoleBtn").addEventListener("click", () => { $("#consoleOutput").textContent = "Ready."; });
   $("#shareCodeBtn").addEventListener("click", shareCode);
-
-  // Mic
   $("#micBtn").addEventListener("click", toggleMic);
 
-  // End interview
   $("#endInterviewBtn").addEventListener("click", () => {
     if (state.isWaiting) return;
     if (confirm("End the interview and get the final decision?")) endInterview();
   });
 
-  // Analysis panel toggle
   $("#analysisToggle").addEventListener("click", () => {
     $("#analysisPanel").classList.toggle("collapsed");
   });
 
-  // Keyboard shortcut: Ctrl+Enter to run code
   document.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();

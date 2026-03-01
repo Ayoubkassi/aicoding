@@ -17,7 +17,7 @@ api_key = os.environ.get("MISTRAL_API_KEY", "")
 client = None
 
 eleven_key = os.environ.get("ELEVENLABS_API_KEY", "")
-eleven_voice = os.environ.get("ELEVENLABS_VOICE_ID", "1kPiKqeeOH1T30gvvZOi")
+eleven_voice = os.environ.get("ELEVENLABS_VOICE_ID", "cjVigY5qzO86Huf0OWal")
 eleven_client = None
 
 
@@ -69,11 +69,10 @@ def tts():
         audio = eleven_client.text_to_speech.convert(
             text=text,
             voice_id=eleven_voice,
-            model_id="eleven_multilingual_v2",
+            model_id="eleven_turbo_v2_5",
             output_format="mp3_44100_128",
         )
-        audio_bytes = b"".join(audio)
-        return Response(audio_bytes, mimetype="audio/mpeg")
+        return Response(audio, mimetype="audio/mpeg")
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

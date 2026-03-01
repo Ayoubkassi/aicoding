@@ -135,6 +135,8 @@
         <div class="discussion-panel">
           <div class="discussion-messages" id="discussionMessages"></div>
 
+          <div id="observingIndicator" class="observing-indicator"><span class="observing-eye">&#128065;</span> Alex is observing...</div>
+
           <div class="typing-indicator" id="typingIndicator">
             <div class="typing-dot"></div>
             <div class="typing-dot"></div>
@@ -193,6 +195,7 @@
             <div class="phase-section">
               <div class="phase-track" id="phaseTrack">
                 <div class="phase-step active" data-phase="intro">Intro</div>
+                <div class="phase-step" data-phase="warmup">Warmup</div>
                 <div class="phase-step" data-phase="problem">Problem</div>
                 <div class="phase-step" data-phase="coding">Coding</div>
                 <div class="phase-step" data-phase="review">Review</div>
@@ -254,6 +257,10 @@
           <svg viewBox="0 0 24 24" fill="none" width="16" height="16"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Save Report
         </button>
+        <button class="btn-download" id="downloadTranscriptBtn">
+          <svg viewBox="0 0 24 24" fill="none" width="16" height="16"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="14 2 14 8 20 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><line x1="16" y1="13" x2="8" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="16" y1="17" x2="8" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          Download Transcript
+        </button>
         <button class="btn-primary" onclick="location.reload()">New Interview</button>
       </div>
     </div>
@@ -270,6 +277,9 @@
       <p>Leaving this tab during the interview is not allowed and has been recorded.</p>
     </div>
   </div>
+
+  <!-- Webcam self-preview PiP -->
+  <div id="webcamPip" class="webcam-pip"><video id="webcamPreview" muted playsinline autoplay></video></div>
 
   <!-- Hidden elements for cheating detection -->
   <video id="webcamFeed" style="display:none" muted playsinline></video>
