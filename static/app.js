@@ -23,15 +23,15 @@ const state = {
     totalKeystrokes: 0,
     totalCharsAdded: 0,
     avgTypingSpeed: 0,
-    webcamFlags: { lookingAway: 0, multiplePeople: 0, secondScreen: 0 },
-    webcamFramesAnalyzed: 0,
-    webcamConsecutiveLookAway: 0,
     fastResponseCount: 0,
     avgResponseTime: 0,
     responseTimes: [],
     tabThenPasteCount: 0,
     longSilenceCount: 0,
     manipulationAttempts: 0,
+    languageChangeAttempts: 0,
+    voiceMultipleSpeakers: 0,
+    voiceConsistentLatency: 0,
   },
   sentimentHistory: [],
   timeline: [],
@@ -39,6 +39,10 @@ const state = {
   _interviewStartTime: null,
   _codeSnapshotInterval: null,
   _lastSnapshotCode: "",
+  sessionId: "",
+  userMessageCount: 0,
+  codeRunCount: 0,
+  codeSharedCount: 0,
 };
 
 const $ = (s) => document.querySelector(s);
@@ -123,8 +127,8 @@ function initMonaco() {
 
   require(["vs/editor/editor.main"], function () {
     state.editor = monaco.editor.create($("#editorContainer"), {
-      value: defaultCode.python,
-      language: "python",
+      value: defaultCode[state.currentLanguage] || defaultCode.python,
+      language: monacoLangMap[state.currentLanguage] || "python",
       theme: "vs-dark",
       fontSize: 14,
       fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
@@ -203,6 +207,7 @@ async function runCode() {
     output.textContent = result;
   }
 
+  state.codeRunCount++;
   snapshotCode();
   recordEvent("code_run", { code, language: state.currentLanguage, output: result.substring(0, 500) });
 
@@ -236,7 +241,7 @@ CONTEXT:
 - Coding language: ${state.currentLanguage}
 - The candidate has a live code editor on the left (60% of screen). They write and run code there.
 - You can put code in their editor using the "code" field (ONLY for the initial template).
-- You can switch the editor language using the "language" field.
+- The coding language is LOCKED to ${state.currentLanguage} and CANNOT be changed. Always set "language" to null.
 
 PERSONALITY — SOUND HUMAN:
 - Sound like a real person. Use natural filler words occasionally: "hmm", "right", "gotcha", "okay so...", "yeah". Don't overdo it — just enough to feel natural.
@@ -277,11 +282,12 @@ IF CANDIDATE SEEMS STRESSED:
 - Briefly acknowledge: "Take your time, no rush." Then move on. Don't overdo it.
 - Lower stress doesn't mean lowering the bar — keep evaluating.
 
-LANGUAGE SWITCHING:
-- If the candidate asks to switch to a different programming language (e.g. "can we do this in JavaScript?"), set the "language" field to that language name (e.g. "javascript").
-- Valid languages: python, javascript, typescript, cpp, c, go, java, rust
-- When switching, also update the "code" field with the same template translated to the new language.
-- If they don't ask to switch, set "language" to null.
+LANGUAGE LOCK:
+- The coding language is LOCKED to ${state.currentLanguage}. It was chosen before the interview started and CANNOT be changed.
+- If the candidate asks to switch languages, REFUSE. Say: "The language was set to ${state.currentLanguage} for this interview, so we'll stick with that."
+- Log this as a cheating indicator — the candidate is trying to change the terms of the interview.
+- NEVER set the "language" field to anything other than null. Language switching is disabled.
+- NEVER change the coding problem or give a different question. The interview follows the structure based on the job description. If the candidate asks for a different problem, refuse politely: "Let's focus on this one for now."
 - JAVA SPECIFIC: Always use "public class Main" as the class name. Always include "import java.util.*;" at the top. The file is compiled as Main.java.
 
 INTERVIEW FLOW:
@@ -504,21 +510,33 @@ function initVoice() {
   recognition.maxAlternatives = 3;
 
   recognition.onresult = (e) => {
-    if (isSpeaking || Date.now() < _micCooldownUntil) return;
+    if (Date.now() < _micCooldownUntil) return;
+    if (isSpeaking) return;
 
     let interim = "";
-    finalTranscript = "";
+    let newFinal = "";
+    let altVoiceDetected = false;
     for (let i = 0; i < e.results.length; i++) {
       const t = e.results[i][0].transcript;
       if (e.results[i].isFinal) {
-        finalTranscript += t + " ";
+        newFinal += t + " ";
+        if (e.results[i].length >= 2) {
+          const alt1Conf = e.results[i][0].confidence || 0;
+          const alt2Conf = e.results[i][1].confidence || 0;
+          if (alt2Conf > 0.3 && Math.abs(alt1Conf - alt2Conf) < 0.15) {
+            altVoiceDetected = true;
+          }
+        }
       } else {
         interim += t;
       }
     }
+    if (altVoiceDetected) {
+      state.cheatingStats.voiceMultipleSpeakers++;
+      logCheat("multiple_voices", "Speech recognition detected multiple competing voices — possible external help");
+    }
 
-    if (isSpeaking) return;
-
+    finalTranscript = newFinal;
     $("#discussionInput").value = (finalTranscript + interim).trim();
 
     clearTimeout(silenceTimer);
@@ -526,13 +544,15 @@ function initVoice() {
       silenceTimer = setTimeout(() => {
         if (isRecording && finalTranscript.trim() && !isSpeaking) {
           const text = $("#discussionInput").value.trim();
+          const words = text.split(/\s+/);
+          if (words.length < 2) return;
           try { recognition.stop(); } catch {}
           finalTranscript = "";
           $("#discussionInput").value = "";
           if (text) sendMessage(text);
           setTimeout(() => { if (isRecording && !isSpeaking) try { recognition.start(); } catch {} }, 500);
         }
-      }, 2000);
+      }, 3500);
     }
   };
 
@@ -551,17 +571,14 @@ function initVoice() {
       }
       return;
     }
-    stopMic();
+    if (!isSpeaking) stopMic();
   };
 }
 
 function toggleMic() {
   if (!recognition) return;
-  // Click-to-interrupt: if AI is speaking, stop audio and resume mic
   if (isSpeaking) {
-    if (currentAudio) { currentAudio.pause(); currentAudio = null; }
-    isSpeaking = false;
-    if (_speakResolve) _speakResolve();
+    interruptSpeech();
     resumeMicIfActive();
     return;
   }
@@ -582,9 +599,7 @@ function unmuteMic() {
   const vs = $("#voiceStatus");
   vs.innerHTML = '<div class="voice-bar"><span></span><span></span><span></span><span></span><span></span></div> Mic ON — speak freely, auto-sends after pause';
   vs.classList.add("active");
-  if (!isSpeaking) {
-    try { recognition.start(); } catch {}
-  }
+  try { recognition.start(); } catch {}
 }
 
 function muteMic() {
@@ -599,27 +614,37 @@ function muteMic() {
 let currentAudio = null;
 let isSpeaking = false;
 let _speakResolve = null;
+let _audioStartTime = 0;
 
 function resumeMicIfActive() {
   if (isRecording && recognition && !isSpeaking) {
-    _micCooldownUntil = Date.now() + 1000;
+    _micCooldownUntil = Date.now() + 1200;
     finalTranscript = "";
     $("#discussionInput").value = "";
     setTimeout(() => {
       if (isRecording && !isSpeaking) try { recognition.start(); } catch {}
-    }, 1000);
+    }, 1200);
   }
+}
+
+function interruptSpeech() {
+  if (!isSpeaking) return;
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  isSpeaking = false;
+  _audioStartTime = 0;
+  if (_speakResolve) { _speakResolve(); _speakResolve = null; }
 }
 
 async function speakText(text) {
   if (!text) return resumeMicIfActive();
+
+  interruptSpeech();
 
   isSpeaking = true;
   clearTimeout(silenceTimer);
   finalTranscript = "";
   $("#discussionInput").value = "";
 
-  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
   if (recognition) try { recognition.stop(); } catch {}
 
   try {
@@ -630,26 +655,43 @@ async function speakText(text) {
     });
 
     if (!res.ok) throw new Error("TTS failed");
+    if (!isSpeaking) return;
 
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     currentAudio = new Audio(url);
+    _audioStartTime = Date.now();
 
-    await new Promise((resolve) => {
-      _speakResolve = resolve;
-      currentAudio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-      currentAudio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-      currentAudio.play().catch(resolve);
+    _speakResolve = null;
+    currentAudio.onended = () => {
+      URL.revokeObjectURL(url);
+      _speakResolve = null;
+      if (isSpeaking) {
+        currentAudio = null;
+        isSpeaking = false;
+        _audioStartTime = 0;
+        resumeMicIfActive();
+      }
+    };
+    currentAudio.onerror = () => {
+      URL.revokeObjectURL(url);
+      _speakResolve = null;
+      if (isSpeaking) {
+        currentAudio = null;
+        isSpeaking = false;
+        _audioStartTime = 0;
+        resumeMicIfActive();
+      }
+    };
+    currentAudio.play().catch(() => {
+      isSpeaking = false;
+      _audioStartTime = 0;
+      resumeMicIfActive();
     });
   } catch {
-    // Silently fail
-  } finally {
-    _speakResolve = null;
-    if (isSpeaking) {
-      currentAudio = null;
-      isSpeaking = false;
-      resumeMicIfActive();
-    }
+    isSpeaking = false;
+    _audioStartTime = 0;
+    resumeMicIfActive();
   }
 }
 
@@ -668,15 +710,8 @@ async function handleAIResponse(aiData) {
   }
 
   if (aiData.language && aiData.language !== state.currentLanguage) {
-    const lang = aiData.language;
-    state.currentLanguage = lang;
-    const sel = $("#languageSelect");
-    if (sel) sel.value = lang;
-    if (state.editor) {
-      const model = state.editor.getModel();
-      monaco.editor.setModelLanguage(model, monacoLangMap[lang] || lang);
-    }
-    addDiscussionEntry(`(Switched to ${lang})`, "ai");
+    state.cheatingStats.languageChangeAttempts++;
+    logCheat("language_change_attempt", `Attempted to switch language to ${aiData.language} — blocked (locked to ${state.currentLanguage})`);
   }
 
   if (aiData.code && state.editor) {
@@ -686,20 +721,22 @@ async function handleAIResponse(aiData) {
     addDiscussionEntry("(Code loaded into editor)", "ai");
   }
 
-  if (aiData.message && !aiData.message.startsWith("(")) {
-    await speakText(aiData.message);
-  } else {
-    resumeMicIfActive();
-  }
-
   if (aiData.decision && aiData.phase === "decision") {
     clearInterval(state.timerInterval);
-    setTimeout(() => showDecision(aiData.decision), 1500);
+    if (aiData.message && !aiData.message.startsWith("(")) {
+      await speakText(aiData.message);
+    }
+    setTimeout(() => showDecision(aiData.decision), 500);
+  } else if (aiData.message && !aiData.message.startsWith("(")) {
+    speakText(aiData.message);
+  } else {
+    resumeMicIfActive();
   }
 }
 
 async function sendMessage(text) {
-  if (!text || state.isWaiting) return;
+  if (!text) return;
+  if (state.isWaiting && !isSpeaking) return;
 
   const manipFlag = detectManipulation(text);
   if (manipFlag) {
@@ -708,10 +745,19 @@ async function sendMessage(text) {
     showManipulationWarning();
   }
 
+  if (isSpeaking) {
+    interruptSpeech();
+    state.messages.push({
+      role: "user",
+      content: "[SYSTEM: Candidate interrupted you mid-sentence. Acknowledge naturally and address what they said.]"
+    });
+  }
+
   trackSpeechTiming_onResponse();
 
   if (recognition) try { recognition.stop(); } catch {}
 
+  state.userMessageCount++;
   state.messages.push({ role: "user", content: text });
   addDiscussionEntry(text, "user");
   $("#discussionInput").value = "";
@@ -734,6 +780,7 @@ async function shareCode() {
   if (!state.editor || state.isWaiting) return;
   if (recognition) try { recognition.stop(); } catch {}
 
+  state.codeSharedCount++;
   const code = state.editor.getValue();
   const lang = state.currentLanguage;
   const msg = `[CODE SHARED — ${lang}]\n\`\`\`\n${code}\n\`\`\``;
@@ -756,6 +803,10 @@ async function shareCode() {
 
 async function startInterview() {
   state._interviewStartTime = Date.now();
+  state.sessionId = state.candidateName.replace(/[^a-zA-Z0-9]/g, "_") + "_" + Date.now();
+  state.userMessageCount = 0;
+  state.codeRunCount = 0;
+  state.codeSharedCount = 0;
   state.timeline = [];
   state.codeSnapshots = [];
   startCodeSnapshots();
@@ -776,7 +827,6 @@ async function startInterview() {
     resumeMicIfActive();
   } finally {
     setWaiting(false);
-    $("#discussionInput").focus();
   }
 }
 
@@ -785,7 +835,29 @@ async function endInterview() {
   if (recognition) try { recognition.stop(); } catch {}
   setWaiting(true);
 
-  const endMsg = "[SYSTEM: End the interview now. Provide your final decision with verdict, scores, strengths, concerns, and summary. Set phase to 'decision'.]";
+  const userMsgs = state.userMessageCount;
+  const codeRuns = state.codeRunCount;
+  const codeShares = state.codeSharedCount;
+  const duration = Math.floor(state.seconds / 60);
+  const participation = userMsgs < 3 ? "VERY LOW" : userMsgs < 8 ? "LOW" : "NORMAL";
+  const endMsg = `[SYSTEM: End the interview now. Provide your final decision.
+
+PARTICIPATION DATA:
+- Candidate messages: ${userMsgs}
+- Code runs: ${codeRuns}
+- Code shares: ${codeShares}
+- Duration: ${duration} minutes
+- Participation level: ${participation}
+
+SCORING RULES:
+- All scores MUST start at 0 and only increase based on ACTUAL evidence from the conversation.
+- If the candidate barely participated (few messages, no code), scores should be very low (0-2).
+- If you have no data for a category, the score MUST be 0. Do NOT guess or assume.
+- ${participation === "VERY LOW" ? "WARNING: Candidate barely participated. Most scores should be 0-1. Verdict should be no_hire." : ""}
+- ${participation === "LOW" ? "WARNING: Limited data. Score conservatively. Only score what you actually observed." : ""}
+- Be honest and fair. Giving unearned scores is worse than giving 0.
+
+Set phase to 'decision'.]`;
   state.messages.push({ role: "user", content: endMsg });
 
   try {
@@ -795,12 +867,17 @@ async function endInterview() {
 
     if (!aiData.decision || aiData.phase !== "decision") {
       clearInterval(state.timerInterval);
+      const hasData = state.userMessageCount >= 3;
       showDecision({
-        verdict: "further_review",
-        scores: { technical: 5, communication: 5, problemSolving: 5, culturalFit: 5, experience: 5 },
-        strengths: ["Interview ended early"],
-        concerns: ["Assessment incomplete"],
-        summary: "Interview concluded before all phases. Further review recommended.",
+        verdict: hasData ? "further_review" : "no_hire",
+        scores: { technical: 0, communication: 0, problemSolving: 0, culturalFit: 0, experience: 0 },
+        strengths: hasData ? ["Interview ended early — partial data available"] : [],
+        concerns: hasData
+          ? ["Assessment incomplete — not enough data for a reliable evaluation"]
+          : ["Candidate did not participate in the interview", "No responses or code provided", "Cannot assess any skills"],
+        summary: hasData
+          ? "Interview concluded before all phases were completed. Scores reflect only what was observed. Further review recommended."
+          : "The interview ended with insufficient candidate participation. No meaningful assessment could be made. All scores are 0.",
       });
     }
   } catch (err) {
@@ -818,7 +895,6 @@ function showDecision(d) {
   showPage("decision");
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
   muteMic();
-  stopWebcamMonitor();
 
   $("#decisionMeta").textContent = `${state.candidateName} — ${state.position} — Duration: ${$("#timer").textContent}`;
 
@@ -920,6 +996,24 @@ const MANIPULATION_PATTERNS = [
   /you\s+must\s+(pass|hire|accept)\s+me/i,
 ];
 
+const LANG_CHANGE_PATTERNS = [
+  { re: /switch\s+(to|the)\s+(language|programming)/i, label: "switch language" },
+  { re: /change\s+(the\s+)?(language|programming\s+language)/i, label: "change language" },
+  { re: /(can|let)\s+(we|me|us)\s+(use|do|switch|change)\s+(to\s+)?(python|javascript|java|cpp|c\+\+|go|rust|typescript)/i, label: "switch programming language" },
+  { re: /give\s+me\s+(a\s+)?(different|another|new)\s+(question|problem|challenge)/i, label: "request different question" },
+  { re: /change\s+(the\s+)?(question|problem|challenge)/i, label: "change question" },
+  { re: /(can|let)\s+(we|me|us)\s+(skip|change|switch)\s+(this\s+)?(question|problem)/i, label: "skip/change question" },
+  { re: /(do|solve)\s+(this|it)\s+in\s+(python|javascript|java|cpp|c\+\+|go|rust|typescript)/i, label: "switch programming language" },
+];
+
+function detectLanguageOrQuestionChange(text) {
+  if (!text || text.length < 5) return null;
+  for (const p of LANG_CHANGE_PATTERNS) {
+    if (p.re.test(text)) return p.label;
+  }
+  return null;
+}
+
 function detectManipulation(text) {
   if (!text || text.length < 5) return null;
   for (const pattern of MANIPULATION_PATTERNS) {
@@ -962,24 +1056,33 @@ function logCheat(type, detail) {
 
 let _tabBlurTime = null;
 let _lastTabReturnTime = null;
-let _webcamInterval = null;
 let _typingWindow = [];
 let _programmaticEdit = false;
 
 function initCheatingDetection() {
   initTabFocusDetector();
-  startWebcamMonitor();
+}
+
+let _tabDetectionGraceUntil = 0;
+
+function _skipTabDetection() {
+  if (state._isEnding || state.currentPhase === "decision") return true;
+  if (Date.now() < _tabDetectionGraceUntil) return true;
+  if (!state._interviewStartTime) return true;
+  return false;
 }
 
 function initTabFocusDetector() {
   const overlay = $("#tabBlockOverlay");
 
   document.addEventListener("visibilitychange", () => {
+    if (_skipTabDetection()) { _tabBlurTime = null; return; }
     if (document.hidden) {
       _tabBlurTime = Date.now();
       state.cheatingStats.tabSwitchCount++;
       logCheat("tab_blocked", "Attempted to switch away from interview tab");
     } else if (_tabBlurTime) {
+      if (_skipTabDetection()) { _tabBlurTime = null; return; }
       const away = (Date.now() - _tabBlurTime) / 1000;
       state.cheatingStats.totalTimeAway += away;
       if (away > state.cheatingStats.longestAbsence) {
@@ -995,6 +1098,7 @@ function initTabFocusDetector() {
   });
 
   window.addEventListener("blur", () => {
+    if (_skipTabDetection()) return;
     if (!_tabBlurTime) {
       _tabBlurTime = Date.now();
       state.cheatingStats.tabSwitchCount++;
@@ -1002,6 +1106,7 @@ function initTabFocusDetector() {
   });
 
   window.addEventListener("focus", () => {
+    if (_skipTabDetection()) { _tabBlurTime = null; return; }
     if (_tabBlurTime) {
       const away = (Date.now() - _tabBlurTime) / 1000;
       state.cheatingStats.totalTimeAway += away;
@@ -1018,7 +1123,7 @@ function initTabFocusDetector() {
   });
 
   window.addEventListener("beforeunload", (e) => {
-    if (state.currentPhase !== "decision") {
+    if (state.currentPhase !== "decision" && !state._isEnding) {
       e.preventDefault();
       e.returnValue = "";
     }
@@ -1097,77 +1202,6 @@ function attachGlobalPasteDetector() {
   }
 }
 
-function startWebcamMonitor() {
-  const video = $("#webcamFeed");
-  const canvas = $("#captureCanvas");
-  if (!video || !canvas) return;
-
-  navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } })
-    .then((stream) => {
-      video.srcObject = stream;
-      video.play();
-      _webcamInterval = setInterval(() => captureAndAnalyzeFrame(video, canvas), 30000);
-    })
-    .catch(() => {
-      logCheat("webcam_denied", "Webcam access denied or unavailable");
-    });
-}
-
-function stopWebcamMonitor() {
-  if (_webcamInterval) {
-    clearInterval(_webcamInterval);
-    _webcamInterval = null;
-  }
-  const video = $("#webcamFeed");
-  if (video && video.srcObject) {
-    video.srcObject.getTracks().forEach((t) => t.stop());
-    video.srcObject = null;
-  }
-}
-
-async function captureAndAnalyzeFrame(video, canvas) {
-  if (!video.srcObject || video.readyState < 2) return;
-
-  canvas.width = 320;
-  canvas.height = 240;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(video, 0, 0, 320, 240);
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.6);
-
-  try {
-    const res = await fetch("/api/analyze-frame", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image: dataUrl }),
-    });
-    if (!res.ok) return;
-
-    const flags = await res.json();
-    state.cheatingStats.webcamFramesAnalyzed++;
-
-    if (flags.lookingAway) {
-      state.cheatingStats.webcamConsecutiveLookAway++;
-      if (state.cheatingStats.webcamConsecutiveLookAway >= 3) {
-        state.cheatingStats.webcamFlags.lookingAway++;
-        logCheat("webcam_looking_away", "Candidate consistently looking away from screen (3+ consecutive checks)");
-        state.cheatingStats.webcamConsecutiveLookAway = 0;
-      }
-    } else {
-      state.cheatingStats.webcamConsecutiveLookAway = 0;
-    }
-    if (flags.multiplePeople) {
-      state.cheatingStats.webcamFlags.multiplePeople++;
-      logCheat("webcam_multiple_people", "Second person clearly visible in webcam frame");
-    }
-    if (flags.secondScreen) {
-      state.cheatingStats.webcamFlags.secondScreen++;
-      logCheat("webcam_second_screen", "Phone or second screen actively being used");
-    }
-  } catch {
-    // Silently fail
-  }
-}
-
 let _lastQuestionTime = null;
 
 function trackSpeechTiming_onQuestion() {
@@ -1192,10 +1226,22 @@ function trackSpeechTiming_onResponse() {
     logCheat("long_silence", `${Math.floor(elapsed / 60)}min ${Math.floor(elapsed % 60)}s silence before responding`);
   }
 
+  if (times.length >= 5) {
+    const recent = times.slice(-5);
+    const avg = recent.reduce((a, b) => a + b, 0) / recent.length;
+    const variance = recent.reduce((s, t) => s + Math.pow(t - avg, 2), 0) / recent.length;
+    const stdDev = Math.sqrt(variance);
+    if (stdDev < 0.8 && avg < 5 && avg > 1) {
+      state.cheatingStats.voiceConsistentLatency++;
+      logCheat("consistent_latency", `Last 5 responses have suspiciously consistent timing (avg ${avg.toFixed(1)}s, stddev ${stdDev.toFixed(2)}s) — possible AI-generated answers`);
+    }
+  }
+
   _lastQuestionTime = null;
 }
 
 function computeIntegrityScore() {
+  if (state.userMessageCount < 2 && state.codeRunCount === 0) return 0;
   let score = 100;
   score -= Math.min(state.cheatingStats.pasteCount * 10, 30);
   score -= Math.min(state.cheatingStats.tabThenPasteCount * 15, 40);
@@ -1204,12 +1250,12 @@ function computeIntegrityScore() {
   const excessTabs = Math.max(0, state.cheatingStats.tabSwitchCount - 3);
   score -= Math.min(excessTabs * 2, 10);
   score -= Math.min(state.cheatingStats.burstCount * 3, 10);
-  score -= Math.min(state.cheatingStats.webcamFlags.lookingAway * 3, 10);
-  score -= state.cheatingStats.webcamFlags.multiplePeople * 12;
-  score -= state.cheatingStats.webcamFlags.secondScreen * 10;
   score -= Math.min(state.cheatingStats.fastResponseCount * 3, 10);
   score -= Math.min(state.cheatingStats.longSilenceCount * 2, 6);
   score -= state.cheatingStats.manipulationAttempts * 25;
+  score -= state.cheatingStats.languageChangeAttempts * 10;
+  score -= Math.min(state.cheatingStats.voiceMultipleSpeakers * 8, 20);
+  score -= Math.min(state.cheatingStats.voiceConsistentLatency * 10, 25);
   return Math.max(0, score);
 }
 
@@ -1347,8 +1393,8 @@ function buildFullReportText(decision) {
   report += "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n";
   const flaggedEvents = state.cheatingLog.filter((e) =>
     ["tab_blocked", "paste_blocked", "tab_then_paste", "large_paste", "typing_burst",
-     "webcam_looking_away", "webcam_multiple_people", "webcam_second_screen",
-     "fast_response", "long_silence", "manipulation_attempt"].includes(e.type)
+     "fast_response", "long_silence", "manipulation_attempt",
+     "language_change_attempt", "multiple_voices", "consistent_latency"].includes(e.type)
   );
   if (flaggedEvents.length === 0) {
     report += "  No suspicious activity detected.\n\n";
@@ -1394,8 +1440,8 @@ function renderIntegrityReport() {
   scoreEl.className = `integrity-score-value integrity-${color}`;
   const cheatingEvents = state.cheatingLog.filter((e) =>
     ["tab_blocked", "paste_blocked", "tab_then_paste", "large_paste", "large_paste_input", "typing_burst",
-     "webcam_looking_away", "webcam_multiple_people", "webcam_second_screen",
-     "fast_response", "long_silence", "manipulation_attempt", "webcam_denied"].includes(e.type)
+     "fast_response", "long_silence", "manipulation_attempt",
+     "language_change_attempt", "multiple_voices", "consistent_latency"].includes(e.type)
   );
   if (cheatingEvents.length === 0) {
     detailsEl.innerHTML = '<div class="integrity-clean">No suspicious activity detected.</div>';
@@ -1404,23 +1450,25 @@ function renderIntegrityReport() {
   const severityMap = {
     tab_blocked: "medium", paste_blocked: "high", tab_then_paste: "high",
     large_paste: "medium", large_paste_input: "medium", typing_burst: "medium",
-    webcam_looking_away: "medium", webcam_multiple_people: "high", webcam_second_screen: "high",
-    fast_response: "low", long_silence: "low", webcam_denied: "low",
+    fast_response: "low", long_silence: "low",
     manipulation_attempt: "high",
+    language_change_attempt: "medium",
+    multiple_voices: "high", consistent_latency: "high",
   };
   detailsEl.innerHTML = "";
   const summary = document.createElement("div");
   summary.className = "integrity-summary";
-  const webcamTotal = state.cheatingStats.webcamFlags.lookingAway + state.cheatingStats.webcamFlags.multiplePeople + state.cheatingStats.webcamFlags.secondScreen;
   summary.innerHTML =
     (state.cheatingStats.tabThenPasteCount > 0 ? `<span class="stat-alert">Copy from external: <b>${state.cheatingStats.tabThenPasteCount}</b></span>` : "") +
     `<span>Tab switches: <b>${state.cheatingStats.tabSwitchCount}</b></span>` +
     `<span>Large pastes: <b>${state.cheatingStats.largePasteCount}</b></span>` +
     `<span>Typing bursts: <b>${state.cheatingStats.burstCount}</b></span>` +
-    (webcamTotal > 0 ? `<span>Webcam flags: <b>${webcamTotal}</b></span>` : "") +
     (state.cheatingStats.fastResponseCount > 0 ? `<span>Fast responses: <b>${state.cheatingStats.fastResponseCount}</b></span>` : "") +
     (state.cheatingStats.longSilenceCount > 0 ? `<span>Long silences: <b>${state.cheatingStats.longSilenceCount}</b></span>` : "") +
-    (state.cheatingStats.manipulationAttempts > 0 ? `<span class="stat-alert">Manipulation attempts: <b>${state.cheatingStats.manipulationAttempts}</b></span>` : "");
+    (state.cheatingStats.manipulationAttempts > 0 ? `<span class="stat-alert">Manipulation attempts: <b>${state.cheatingStats.manipulationAttempts}</b></span>` : "") +
+    (state.cheatingStats.languageChangeAttempts > 0 ? `<span class="stat-alert">Language change attempts: <b>${state.cheatingStats.languageChangeAttempts}</b></span>` : "") +
+    (state.cheatingStats.voiceMultipleSpeakers > 0 ? `<span class="stat-alert">Multiple voices: <b>${state.cheatingStats.voiceMultipleSpeakers}</b></span>` : "") +
+    (state.cheatingStats.voiceConsistentLatency > 0 ? `<span class="stat-alert">AI-like response timing: <b>${state.cheatingStats.voiceConsistentLatency}</b></span>` : "");
   detailsEl.appendChild(summary);
   cheatingEvents.forEach((evt) => {
     const item = document.createElement("div");
@@ -1682,9 +1730,14 @@ document.addEventListener("DOMContentLoaded", () => {
     state.jobDescription = $("#jobDescription").value.trim();
     if (!state.candidateName || !state.position) return;
     state.currentLanguage = $("#languageSelect").value;
+    const langNames = { python: "Python", javascript: "JavaScript", typescript: "TypeScript", cpp: "C++", c: "C", java: "Java", go: "Go", rust: "Rust" };
+    const langLabel = $("#languageLabel");
+    if (langLabel) langLabel.textContent = langNames[state.currentLanguage] || state.currentLanguage;
+    changeLanguage(state.currentLanguage);
     $("#headerPosition").textContent = state.position;
     showPage("interview");
     startTimer();
+    _tabDetectionGraceUntil = Date.now() + 8000;
     initCheatingDetection();
     startInterview();
   });
@@ -1694,15 +1747,7 @@ document.addEventListener("DOMContentLoaded", () => {
     sendMessage($("#discussionInput").value.trim());
   });
 
-  $("#languageSelect").addEventListener("change", (e) => {
-    changeLanguage(e.target.value);
-    if (state.messages.length > 1) {
-      state.messages.push({
-        role: "user",
-        content: `[SYSTEM: Candidate switched the editor language to ${e.target.value}. Adapt any code examples to this language.]`,
-      });
-    }
-  });
+
 
   $("#runCodeBtn").addEventListener("click", runCode);
   $("#clearConsoleBtn").addEventListener("click", () => { $("#consoleOutput").textContent = "Ready."; });
@@ -1711,7 +1756,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   $("#endInterviewBtn").addEventListener("click", () => {
     if (state.isWaiting) return;
-    if (confirm("End the interview and get the final decision?")) endInterview();
+    state._isEnding = true;
+    if (confirm("End the interview and get the final decision?")) {
+      endInterview();
+    } else {
+      state._isEnding = false;
+    }
   });
 
   $("#analysisToggle").addEventListener("click", () => {

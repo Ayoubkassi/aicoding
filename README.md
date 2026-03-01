@@ -79,18 +79,26 @@ Unlike basic LLM chatbots, HireAI is a **complete interview simulation** that mi
 - **Live UI panel** — displays analysis results in the sidebar with color-coded scores
 
 ### Multi-Modal Cheating Detection
+
+**Client-Side AI Proctoring** — powered by [MediaPipe FaceLandmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker) running in-browser via WebAssembly. Analyzes 478 face landmarks + 52 blendshapes + head pose matrix at ~5fps. No API calls needed — deterministic, real-time, and free.
+
+Inspired by [exam-cheating-detection](https://github.com/AarambhDevHub/exam-cheating-detection) with consecutive-frame thresholding to eliminate false positives.
+
 | Signal | How It's Detected | Severity |
 |--------|-------------------|----------|
+| Face absent | MediaPipe — no face detected for 3+ seconds | High |
+| Gaze away | MediaPipe blendshapes — `eyeLookOut/In/Up` sustained off-center | Medium |
+| Head turned | MediaPipe transformation matrix — yaw > 30° | Medium |
+| Multiple faces | MediaPipe — 2+ faces for 5+ consecutive frames | High |
+| Talking to someone | MediaPipe — `mouthOpen` + `jawOpen` while AI isn't expecting speech | Medium |
 | Tab switching | Page Visibility API | Medium |
 | Copy from external | Tab switch → paste sequence | High |
 | Large pastes | Clipboard monitoring in editor | Medium |
 | Typing bursts | Keystroke velocity analysis | Medium |
-| Looking away | Webcam + Mistral Vision | Medium |
-| Multiple people | Webcam + Mistral Vision | High |
-| Second screen / phone | Webcam + Mistral Vision | High |
 | Manipulation attempts | 3-layer detection (see below) | High |
 | Fast responses | Response timing analysis | Low |
 | Long silences | Inactivity tracking | Low |
+| Second screen / phone | Mistral Vision fallback (when MediaPipe unavailable) | High |
 
 ### Anti-Manipulation Safety System
 A **3-layer defense** against prompt injection and social engineering:

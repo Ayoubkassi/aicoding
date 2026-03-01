@@ -40,6 +40,19 @@
           <label for="jobDescription">Job Description / Requirements</label>
           <textarea id="jobDescription" rows="3" placeholder="e.g. We need a senior frontend engineer proficient in React, TypeScript, and system design..." required></textarea>
         </div>
+        <div class="form-group">
+          <label for="languageSelect">Coding Language (locked after start)</label>
+          <select id="languageSelect" class="language-select" required>
+            <option value="python">Python</option>
+            <option value="javascript">JavaScript</option>
+            <option value="cpp">C++</option>
+            <option value="c">C</option>
+            <option value="go">Go</option>
+            <option value="java">Java</option>
+            <option value="typescript">TypeScript</option>
+            <option value="rust">Rust</option>
+          </select>
+        </div>
         <button type="submit" class="btn-primary">
           <svg viewBox="0 0 24 24" fill="none" width="20" height="20"><polygon points="5,3 19,12 5,21" fill="currentColor"/></svg>
           Start Interview
@@ -80,6 +93,7 @@
         <span id="headerPosition" class="badge">Position</span>
         <span id="headerPhase" class="badge badge-phase">Introduction</span>
         <span id="convaiStatus" class="convai-status connecting">Connecting...</span>
+
       </div>
       <div class="header-center">
         <div class="recording-dot"></div>
@@ -98,16 +112,7 @@
       <div class="editor-panel">
         <div class="editor-toolbar">
           <div class="toolbar-left">
-            <select id="languageSelect" class="language-select">
-              <option value="python">Python</option>
-              <option value="javascript">JavaScript</option>
-              <option value="cpp">C++</option>
-              <option value="c">C</option>
-              <option value="go">Go</option>
-              <option value="java">Java</option>
-              <option value="typescript">TypeScript</option>
-              <option value="rust">Rust</option>
-            </select>
+            <span id="languageLabel" class="language-label"></span>
           </div>
           <div class="toolbar-right">
             <button class="btn-toolbar" id="shareCodeBtn" title="Share code with AI interviewer">
@@ -374,12 +379,7 @@
     </div>
   </div>
 
-  <!-- Webcam self-preview PiP -->
-  <div id="webcamPip" class="webcam-pip"><video id="webcamPreview" muted playsinline autoplay></video></div>
 
-  <!-- Hidden elements for cheating detection -->
-  <video id="webcamFeed" style="display:none" muted playsinline></video>
-  <canvas id="captureCanvas" style="display:none"></canvas>
 
   <!-- Monaco Editor from CDN -->
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
@@ -394,6 +394,8 @@
       console.warn('ElevenLabs SDK load failed, falling back to text mode:', e);
     }
   </script>
+
+
 
   <script src="app.js"></script>
 </body>
