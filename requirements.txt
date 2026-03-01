@@ -2,3 +2,4 @@ flask
 mistralai
 python-dotenv
 elevenlabs
+requests

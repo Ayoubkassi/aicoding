@@ -500,3 +500,65 @@ body{font-family:var(--font-ui);background:var(--bg);color:var(--text);height:10
   75%{transform:scale(1) rotate(0)}
   100%{transform:scale(1)}
 }
+
+/* ========== CONVAI STATUS BADGE ========== */
+.convai-status{
+  padding:.15rem .55rem;border-radius:16px;font-size:.65rem;font-weight:600;
+  display:inline-flex;align-items:center;gap:4px;transition:all .3s;
+}
+.convai-status::before{
+  content:'';width:6px;height:6px;border-radius:50%;flex-shrink:0;
+}
+.convai-status.connecting{background:rgba(253,203,110,.12);color:var(--yellow);border:1px solid rgba(253,203,110,.25)}
+.convai-status.connecting::before{background:var(--yellow);animation:blink 1s infinite}
+.convai-status.connected,.convai-status.listening{background:rgba(0,184,148,.12);color:var(--green);border:1px solid rgba(0,184,148,.25)}
+.convai-status.connected::before,.convai-status.listening::before{background:var(--green)}
+.convai-status.speaking{background:rgba(108,92,231,.12);color:var(--accent-light);border:1px solid rgba(108,92,231,.25)}
+.convai-status.speaking::before{background:var(--accent-light);animation:blink .8s infinite}
+.convai-status.muted{background:rgba(139,148,158,.12);color:var(--text-dim);border:1px solid rgba(139,148,158,.25)}
+.convai-status.muted::before{background:var(--text-muted)}
+.convai-status.disconnected{background:rgba(139,148,158,.08);color:var(--text-muted);border:1px solid rgba(139,148,158,.15)}
+.convai-status.disconnected::before{background:var(--text-muted)}
+.convai-status.error{background:var(--red-dim);color:var(--red);border:1px solid rgba(225,112,85,.25)}
+.convai-status.error::before{background:var(--red)}
+
+/* ========== CODESTRAL CODE INTELLIGENCE ========== */
+.code-analysis-section{
+  padding:.6rem;background:var(--bg);border-radius:var(--radius-sm);
+  border:1px solid rgba(108,92,231,.15);margin-bottom:.5rem;
+}
+
+.code-analysis-header{
+  display:flex;align-items:center;gap:.4rem;font-size:.72rem;font-weight:600;
+  color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em;margin-bottom:.5rem;
+}
+.code-analysis-icon{font-style:normal;font-size:.85rem}
+
+.code-analysis-badge{
+  margin-left:auto;padding:.1rem .4rem;border-radius:10px;font-size:.6rem;
+  font-weight:600;text-transform:uppercase;letter-spacing:.03em;
+}
+.code-analysis-badge.idle{background:rgba(139,148,158,.1);color:var(--text-muted)}
+.code-analysis-badge.analyzing{background:rgba(253,203,110,.15);color:var(--yellow);animation:blink 1s infinite}
+.code-analysis-badge.active{background:rgba(0,184,148,.12);color:var(--green)}
+.code-analysis-badge.error{background:var(--red-dim);color:var(--red)}
+
+.code-analysis-body{display:flex;flex-direction:column;gap:.4rem}
+.code-analysis-empty{font-size:.72rem;color:var(--text-muted);font-style:italic}
+
+.ca-row{display:flex;align-items:center;gap:.4rem;font-size:.72rem;padding:.2rem 0}
+.ca-label{color:var(--text-dim);min-width:70px;flex-shrink:0;font-weight:500}
+.ca-value{color:var(--text);flex:1}
+.ca-tag{
+  padding:.1rem .45rem;border-radius:8px;font-size:.65rem;font-weight:600;color:#fff;
+}
+
+.ca-score-bar{flex:1;height:5px;background:var(--bg-card);border-radius:3px;overflow:hidden;max-width:100px}
+.ca-score-fill{height:100%;border-radius:3px;transition:width .6s ease}
+.ca-score-val{font-weight:600;color:var(--text);min-width:30px;text-align:right}
+
+.ca-issues{display:flex;flex-direction:column;gap:.2rem;margin-top:.2rem}
+.ca-issue-item{
+  padding:.25rem .4rem;font-size:.68rem;color:var(--yellow);
+  background:rgba(253,203,110,.08);border-radius:3px;border-left:2px solid var(--yellow);
+}

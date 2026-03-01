@@ -55,12 +55,12 @@
         <div class="feature">
           <div class="feature-icon">🧠</div>
           <h3>AI Interviewer</h3>
-          <p>Unbiased, adaptive, with real-time sentiment analysis</p>
+          <p>Powered by Mistral + ElevenLabs Conversational AI</p>
         </div>
         <div class="feature">
           <div class="feature-icon">📊</div>
           <h3>Smart Decision</h3>
-          <p>Data-driven hiring decision with detailed scoring</p>
+          <p>Data-driven hiring with Codestral real-time code analysis</p>
         </div>
       </div>
     </div>
@@ -79,6 +79,7 @@
         </div>
         <span id="headerPosition" class="badge">Position</span>
         <span id="headerPhase" class="badge badge-phase">Introduction</span>
+        <span id="convaiStatus" class="convai-status connecting">Connecting...</span>
       </div>
       <div class="header-center">
         <div class="recording-dot"></div>
@@ -165,6 +166,17 @@
             <svg viewBox="0 0 24 24" fill="none" width="16" height="16"><path d="M18 15l-6-6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </div>
           <div class="analysis-content" id="analysisContent">
+            <!-- Codestral Code Intelligence -->
+            <div class="code-analysis-section" id="codeAnalysisSection">
+              <div class="code-analysis-header">
+                <span class="code-analysis-icon">⚡</span>
+                <span>Codestral Code Intelligence</span>
+                <span class="code-analysis-badge" id="codeAnalysisBadge">Idle</span>
+              </div>
+              <div class="code-analysis-body" id="codeAnalysisBody">
+                <div class="code-analysis-empty">Codestral watches your code in real-time and provides analysis...</div>
+              </div>
+            </div>
             <!-- Sentiment -->
             <div class="sentiment-section">
               <div class="meter">
@@ -287,6 +299,18 @@
 
   <!-- Monaco Editor from CDN -->
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+
+  <!-- ElevenLabs Conversational AI SDK (loaded as ES module, exposed globally) -->
+  <script type="module">
+    try {
+      const mod = await import('https://esm.sh/@11labs/client@0.2.0');
+      window.ElevenLabsConversation = mod.Conversation;
+      window.dispatchEvent(new Event('elevenlabs-ready'));
+    } catch (e) {
+      console.warn('ElevenLabs SDK load failed, falling back to text mode:', e);
+    }
+  </script>
+
   <script src="app.js"></script>
 </body>
 </html>
