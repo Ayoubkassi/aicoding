@@ -108,6 +108,15 @@ Each attempt deducts **25 points** from the integrity score — the heaviest pen
 - **Language switching** — candidate can request a different language mid-interview
 - **Paste protection** — clipboard pastes into the editor are blocked and logged
 
+### Interview Playback Timeline
+- **Full session recording** — every message, code change, phase transition, sentiment shift, and integrity event is captured with timestamps
+- **Interactive scrubber** — drag through the entire interview like a video, see the code evolve and conversation unfold
+- **Split-view replay** — left panel shows code at that point in time, right panel shows conversation up to that moment
+- **Speed controls** — 0.5x, 1x, 2x, 4x playback speed with play/pause and step-by-step navigation
+- **Color-coded timeline markers** — purple (AI), green (candidate), yellow (phase change), red (integrity flag), orange (code run)
+- **Live sentiment overlay** — see confidence, stress, and engagement meters update as you scrub through the timeline
+- **Perfect for demos** — show judges the entire interview flow in 2 minutes at 4x speed
+
 ### Interview Reports
 - **Hiring decision** — Strong Hire / Hire / Further Review / No Hire
 - **5 scored dimensions** — Technical, Communication, Problem Solving, Cultural Fit, Experience (0-10)

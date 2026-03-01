@@ -265,6 +265,10 @@
         </div>
       </div>
       <div class="decision-actions">
+        <button class="btn-playback" id="viewPlaybackBtn">
+          <svg viewBox="0 0 24 24" fill="none" width="16" height="16"><polygon points="5,3 19,12 5,21" fill="currentColor"/></svg>
+          View Interview Playback
+        </button>
         <button class="btn-download" id="downloadReportBtn">
           <svg viewBox="0 0 24 24" fill="none" width="16" height="16"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Save Report
@@ -274,6 +278,86 @@
           Download Transcript
         </button>
         <button class="btn-primary" onclick="location.reload()">New Interview</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== PLAYBACK PAGE ========== -->
+  <section id="playback" class="page">
+    <div class="pb-layout">
+      <!-- Top bar -->
+      <div class="pb-header">
+        <div class="pb-header-left">
+          <button id="pbBackToDecision" class="btn-toolbar" title="Back to decision">
+            <svg viewBox="0 0 24 24" fill="none" width="16" height="16"><path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Back
+          </button>
+          <span class="pb-title">Interview Playback</span>
+        </div>
+        <div class="pb-header-center">
+          <span class="badge badge-phase" id="pbPhase">Intro</span>
+          <span class="pb-clock"><span id="pbTime">00:00</span> / <span id="pbTotal">00:00</span></span>
+        </div>
+        <div class="pb-header-right">
+          <div class="pb-sentiment-mini">
+            <div class="pb-sent-row"><span>Conf</span><div class="pb-sent-bar"><div class="pb-sent-fill conf" id="pbConf"></div></div></div>
+            <div class="pb-sent-row"><span>Stress</span><div class="pb-sent-bar"><div class="pb-sent-fill stress" id="pbStress"></div></div></div>
+            <div class="pb-sent-row"><span>Eng</span><div class="pb-sent-bar"><div class="pb-sent-fill eng" id="pbEng"></div></div></div>
+          </div>
+          <span class="mood-tag" id="pbMood">—</span>
+        </div>
+      </div>
+
+      <!-- Main split view -->
+      <div class="pb-body">
+        <!-- Left: Code + Console -->
+        <div class="pb-code-panel">
+          <div class="pb-code-label">Code Editor (read-only)</div>
+          <div id="playbackEditor" class="pb-editor"></div>
+          <div class="pb-console">
+            <div class="pb-console-label">Console Output</div>
+            <pre id="pbConsole" class="pb-console-output">No output yet.</pre>
+          </div>
+        </div>
+
+        <!-- Right: Chat + Events -->
+        <div class="pb-right-panel">
+          <div class="pb-chat-panel">
+            <div class="pb-chat-label">Conversation</div>
+            <div id="pbChat" class="pb-chat-messages"></div>
+          </div>
+          <div class="pb-events-panel">
+            <div class="pb-events-label">Event Log</div>
+            <div id="pbEvents" class="pb-events-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom: Scrubber + Controls -->
+      <div class="pb-controls">
+        <div class="pb-timeline-track" id="pbTrack"></div>
+        <div class="pb-progress-bar">
+          <div class="pb-progress-fill" id="pbProgress"></div>
+          <input type="range" min="0" max="1000" value="0" class="pb-scrubber" id="pbScrubber" />
+        </div>
+        <div class="pb-buttons">
+          <button class="pb-ctrl-btn" id="pbStepBack" title="Previous event">&#9664;&#9664;</button>
+          <button class="pb-ctrl-btn pb-play-btn" id="pbPlayBtn" title="Play / Pause">&#9654;</button>
+          <button class="pb-ctrl-btn" id="pbStepFwd" title="Next event">&#9654;&#9654;</button>
+          <div class="pb-speed-group">
+            <button class="pb-speed-btn" data-speed="0.5">0.5x</button>
+            <button class="pb-speed-btn active" data-speed="1">1x</button>
+            <button class="pb-speed-btn" data-speed="2">2x</button>
+            <button class="pb-speed-btn" data-speed="4">4x</button>
+          </div>
+          <div class="pb-legend">
+            <span class="pb-legend-dot" style="background:#6c5ce7"></span>AI
+            <span class="pb-legend-dot" style="background:#00b894"></span>User
+            <span class="pb-legend-dot" style="background:#fdcb6e"></span>Phase
+            <span class="pb-legend-dot" style="background:#e17055"></span>Code Run
+            <span class="pb-legend-dot" style="background:#d63031"></span>Flag
+          </div>
+        </div>
       </div>
     </div>
   </section>

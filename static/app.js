@@ -34,6 +34,11 @@ const state = {
     manipulationAttempts: 0,
   },
   sentimentHistory: [],
+  timeline: [],
+  codeSnapshots: [],
+  _interviewStartTime: null,
+  _codeSnapshotInterval: null,
+  _lastSnapshotCode: "",
 };
 
 const $ = (s) => document.querySelector(s);
@@ -56,6 +61,36 @@ function startTimer() {
     const s = String(state.seconds % 60).padStart(2, "0");
     $("#timer").textContent = `${m}:${s}`;
   }, 1000);
+}
+
+// ==================== TIMELINE RECORDING ====================
+function recordEvent(type, data) {
+  if (!state._interviewStartTime) return;
+  state.timeline.push({
+    ts: Date.now(),
+    elapsed: Date.now() - state._interviewStartTime,
+    type,
+    phase: state.currentPhase,
+    data,
+  });
+}
+
+function snapshotCode() {
+  if (!state.editor) return;
+  const code = state.editor.getValue();
+  if (code === state._lastSnapshotCode) return;
+  state._lastSnapshotCode = code;
+  const snap = { code, language: state.currentLanguage };
+  state.codeSnapshots.push({ ts: Date.now(), elapsed: Date.now() - state._interviewStartTime, ...snap });
+  recordEvent("code_snapshot", snap);
+}
+
+function startCodeSnapshots() {
+  state._codeSnapshotInterval = setInterval(snapshotCode, 8000);
+}
+
+function stopCodeSnapshots() {
+  if (state._codeSnapshotInterval) clearInterval(state._codeSnapshotInterval);
 }
 
 // ==================== MONACO EDITOR ====================
@@ -167,6 +202,9 @@ async function runCode() {
     result = "Error: " + err.message;
     output.textContent = result;
   }
+
+  snapshotCode();
+  recordEvent("code_run", { code, language: state.currentLanguage, output: result.substring(0, 500) });
 
   if (state.messages.length > 1 && !state.isWaiting) {
     if (recognition) try { recognition.stop(); } catch {}
@@ -370,6 +408,7 @@ function addDiscussionEntry(text, sender) {
 
   container.appendChild(entry);
   container.scrollTop = container.scrollHeight;
+  recordEvent(sender === "ai" ? "message_ai" : "message_user", { text, sender });
 }
 
 function escapeHtml(s) {
@@ -400,6 +439,7 @@ function updateSentiment(s) {
     timestamp: Date.now(),
     phase: state.currentPhase,
   });
+  recordEvent("sentiment", { overall: s.overall, confidence: s.confidence, stress: s.stress, engagement: s.engagement });
 }
 
 function addNotes(notes) {
@@ -416,6 +456,7 @@ function addNotes(notes) {
     list.appendChild(div);
     list.scrollTop = list.scrollHeight;
   });
+  recordEvent("notes", { notes });
 }
 
 function updatePhase(phase) {
@@ -434,6 +475,7 @@ function updatePhase(phase) {
     decision: "Decision",
   };
   $("#headerPhase").textContent = labels[phase] || phase;
+  recordEvent("phase_change", { to: phase });
 }
 
 function setWaiting(on) {
@@ -713,6 +755,10 @@ async function shareCode() {
 }
 
 async function startInterview() {
+  state._interviewStartTime = Date.now();
+  state.timeline = [];
+  state.codeSnapshots = [];
+  startCodeSnapshots();
   state.messages = [{ role: "system", content: buildSystemPrompt() }];
 
   const kickoff = `[SYSTEM: The candidate just joined. Start with a warm, casual ice-breaker — greet them by name, ask how they're doing today, and mention you'll be interviewing them for the ${state.position} role. Keep it brief and friendly (1-2 sentences). Do NOT present the coding problem yet — wait for their response first, then begin the warmup questions.]`;
@@ -766,6 +812,9 @@ async function endInterview() {
 
 // ==================== DECISION PAGE ====================
 function showDecision(d) {
+  stopCodeSnapshots();
+  snapshotCode();
+  recordEvent("decision", { verdict: d.verdict, scores: d.scores });
   showPage("decision");
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
   muteMic();
@@ -902,6 +951,7 @@ function showManipulationWarning() {
 }
 
 function logCheat(type, detail) {
+  recordEvent("integrity", { type, detail });
   state.cheatingLog.push({
     type,
     detail,
@@ -1380,6 +1430,245 @@ function renderIntegrityReport() {
   });
 }
 
+// ==================== PLAYBACK ENGINE ====================
+const playback = {
+  playing: false,
+  speed: 1,
+  currentIdx: 0,
+  animFrame: null,
+  startReal: 0,
+  startElapsed: 0,
+  editor: null,
+};
+
+function initPlayback() {
+  const section = $("#playback");
+  if (!section || state.timeline.length === 0) return;
+
+  showPage("playback");
+
+  const totalElapsed = state.timeline[state.timeline.length - 1].elapsed;
+
+  renderTimelineMarkers(totalElapsed);
+  renderPlaybackAt(0);
+
+  if (!playback.editor) {
+    require(["vs/editor/editor.main"], () => {
+      playback.editor = monaco.editor.create($("#playbackEditor"), {
+        value: "",
+        language: "python",
+        theme: "vs-dark",
+        readOnly: true,
+        minimap: { enabled: false },
+        fontSize: 13,
+        fontFamily: "'JetBrains Mono', monospace",
+        scrollBeyondLastLine: false,
+        lineNumbers: "on",
+        renderLineHighlight: "none",
+        automaticLayout: true,
+      });
+      renderPlaybackAt(0);
+    });
+  } else {
+    playback.editor.layout();
+  }
+}
+
+function renderTimelineMarkers(totalMs) {
+  const track = $("#pbTrack");
+  if (!track) return;
+  track.innerHTML = "";
+
+  const colorMap = {
+    message_ai: "#6c5ce7",
+    message_user: "#00b894",
+    phase_change: "#fdcb6e",
+    code_run: "#e17055",
+    code_snapshot: "#636e72",
+    sentiment: "#74b9ff",
+    integrity: "#d63031",
+    notes: "#a29bfe",
+    decision: "#ffeaa7",
+    manipulation_attempt: "#d63031",
+  };
+
+  state.timeline.forEach((evt, i) => {
+    const pct = totalMs > 0 ? (evt.elapsed / totalMs) * 100 : 0;
+    const dot = document.createElement("div");
+    dot.className = "pb-marker";
+    dot.style.left = pct + "%";
+    dot.style.background = colorMap[evt.type] || "#636e72";
+    dot.title = `${formatMs(evt.elapsed)} — ${evt.type.replace(/_/g, " ")}`;
+    dot.addEventListener("click", () => {
+      playback.currentIdx = i;
+      renderPlaybackAt(i);
+      updateScrubber(evt.elapsed, totalMs);
+    });
+    track.appendChild(dot);
+  });
+}
+
+function renderPlaybackAt(idx) {
+  if (idx < 0) idx = 0;
+  if (idx >= state.timeline.length) idx = state.timeline.length - 1;
+  playback.currentIdx = idx;
+
+  const currentEvt = state.timeline[idx];
+  const totalMs = state.timeline[state.timeline.length - 1].elapsed;
+
+  $("#pbTime").textContent = formatMs(currentEvt.elapsed);
+  $("#pbTotal").textContent = formatMs(totalMs);
+  updateScrubber(currentEvt.elapsed, totalMs);
+
+  const phaseLabels = { intro: "Intro", warmup: "Warmup", problem: "Problem", coding: "Coding", review: "Review", decision: "Decision" };
+  $("#pbPhase").textContent = phaseLabels[currentEvt.phase] || currentEvt.phase;
+
+  const chatEl = $("#pbChat");
+  chatEl.innerHTML = "";
+  for (let i = 0; i <= idx; i++) {
+    const e = state.timeline[i];
+    if (e.type === "message_ai" || e.type === "message_user") {
+      const isAI = e.type === "message_ai";
+      const div = document.createElement("div");
+      div.className = "pb-msg " + (isAI ? "ai" : "user");
+      div.innerHTML = `<span class="pb-msg-time">${formatMs(e.elapsed)}</span>
+        <span class="pb-msg-name">${isAI ? "Alex" : state.candidateName}</span>
+        <span class="pb-msg-text">${escapeHtml(e.data.text)}</span>`;
+      chatEl.appendChild(div);
+    }
+  }
+  chatEl.scrollTop = chatEl.scrollHeight;
+
+  let latestSnap = null;
+  for (let i = idx; i >= 0; i--) {
+    if (state.timeline[i].type === "code_snapshot" || state.timeline[i].type === "code_run") {
+      latestSnap = state.timeline[i].data;
+      break;
+    }
+  }
+  if (playback.editor && latestSnap) {
+    const model = playback.editor.getModel();
+    if (model) {
+      playback.editor.setValue(latestSnap.code || "");
+      monaco.editor.setModelLanguage(model, monacoLangMap[latestSnap.language] || latestSnap.language || "python");
+    }
+  }
+
+  const consoleEl = $("#pbConsole");
+  let latestOutput = "";
+  for (let i = idx; i >= 0; i--) {
+    if (state.timeline[i].type === "code_run") {
+      latestOutput = state.timeline[i].data.output || "";
+      break;
+    }
+  }
+  consoleEl.textContent = latestOutput || "No output yet.";
+
+  let latestSent = null;
+  for (let i = idx; i >= 0; i--) {
+    if (state.timeline[i].type === "sentiment") {
+      latestSent = state.timeline[i].data;
+      break;
+    }
+  }
+  if (latestSent) {
+    $("#pbConf").style.width = Math.round(latestSent.confidence * 100) + "%";
+    $("#pbStress").style.width = Math.round(latestSent.stress * 100) + "%";
+    $("#pbEng").style.width = Math.round(latestSent.engagement * 100) + "%";
+    $("#pbMood").textContent = latestSent.overall || "—";
+  }
+
+  const evtLog = $("#pbEvents");
+  evtLog.innerHTML = "";
+  for (let i = Math.max(0, idx - 4); i <= idx; i++) {
+    const e = state.timeline[i];
+    if (e.type === "message_ai" || e.type === "message_user") continue;
+    const div = document.createElement("div");
+    div.className = "pb-evt-item";
+    const label = e.type.replace(/_/g, " ");
+    div.innerHTML = `<span class="pb-evt-time">${formatMs(e.elapsed)}</span><span class="pb-evt-type">${label}</span>`;
+    evtLog.appendChild(div);
+  }
+}
+
+function updateScrubber(elapsed, total) {
+  const pct = total > 0 ? (elapsed / total) * 100 : 0;
+  $("#pbProgress").style.width = pct + "%";
+  $("#pbScrubber").value = Math.round(pct * 10);
+}
+
+function formatMs(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const m = String(Math.floor(totalSec / 60)).padStart(2, "0");
+  const s = String(totalSec % 60).padStart(2, "0");
+  return m + ":" + s;
+}
+
+function playTimeline() {
+  if (state.timeline.length === 0) return;
+  playback.playing = true;
+  playback.startReal = Date.now();
+  playback.startElapsed = state.timeline[playback.currentIdx].elapsed;
+  $("#pbPlayBtn").textContent = "\u23F8";
+  tickPlayback();
+}
+
+function pauseTimeline() {
+  playback.playing = false;
+  if (playback.animFrame) cancelAnimationFrame(playback.animFrame);
+  $("#pbPlayBtn").textContent = "\u25B6";
+}
+
+function togglePlayback() {
+  if (playback.playing) pauseTimeline();
+  else playTimeline();
+}
+
+function tickPlayback() {
+  if (!playback.playing) return;
+  const realDelta = (Date.now() - playback.startReal) * playback.speed;
+  const targetElapsed = playback.startElapsed + realDelta;
+
+  let nextIdx = playback.currentIdx;
+  while (nextIdx < state.timeline.length - 1 && state.timeline[nextIdx + 1].elapsed <= targetElapsed) {
+    nextIdx++;
+  }
+
+  if (nextIdx !== playback.currentIdx) {
+    renderPlaybackAt(nextIdx);
+  }
+
+  const totalMs = state.timeline[state.timeline.length - 1].elapsed;
+  updateScrubber(Math.min(targetElapsed, totalMs), totalMs);
+  $("#pbTime").textContent = formatMs(Math.min(targetElapsed, totalMs));
+
+  if (nextIdx >= state.timeline.length - 1) {
+    pauseTimeline();
+    return;
+  }
+
+  playback.animFrame = requestAnimationFrame(tickPlayback);
+}
+
+function setPlaybackSpeed(s) {
+  const wasPlaying = playback.playing;
+  if (wasPlaying) pauseTimeline();
+  playback.speed = s;
+  document.querySelectorAll(".pb-speed-btn").forEach((b) => b.classList.remove("active"));
+  const btn = document.querySelector(`.pb-speed-btn[data-speed="${s}"]`);
+  if (btn) btn.classList.add("active");
+  if (wasPlaying) playTimeline();
+}
+
+function stepPlayback(dir) {
+  const next = playback.currentIdx + dir;
+  if (next >= 0 && next < state.timeline.length) {
+    renderPlaybackAt(next);
+    const totalMs = state.timeline[state.timeline.length - 1].elapsed;
+    updateScrubber(state.timeline[next].elapsed, totalMs);
+  }
+}
+
 // ==================== EVENT LISTENERS ====================
 document.addEventListener("DOMContentLoaded", () => {
   initMonaco();
@@ -1435,4 +1724,39 @@ document.addEventListener("DOMContentLoaded", () => {
       runCode();
     }
   });
+
+  const pbPlayBtn = $("#pbPlayBtn");
+  if (pbPlayBtn) pbPlayBtn.addEventListener("click", togglePlayback);
+
+  const pbStepBack = $("#pbStepBack");
+  if (pbStepBack) pbStepBack.addEventListener("click", () => stepPlayback(-1));
+
+  const pbStepFwd = $("#pbStepFwd");
+  if (pbStepFwd) pbStepFwd.addEventListener("click", () => stepPlayback(1));
+
+  document.querySelectorAll(".pb-speed-btn").forEach((btn) => {
+    btn.addEventListener("click", () => setPlaybackSpeed(parseFloat(btn.dataset.speed)));
+  });
+
+  const pbScrubber = $("#pbScrubber");
+  if (pbScrubber) {
+    pbScrubber.addEventListener("input", (e) => {
+      if (state.timeline.length === 0) return;
+      const pct = parseInt(e.target.value) / 1000;
+      const totalMs = state.timeline[state.timeline.length - 1].elapsed;
+      const targetMs = pct * totalMs;
+      let closest = 0;
+      for (let i = 0; i < state.timeline.length; i++) {
+        if (state.timeline[i].elapsed <= targetMs) closest = i;
+        else break;
+      }
+      renderPlaybackAt(closest);
+    });
+  }
+
+  const viewPlaybackBtn = $("#viewPlaybackBtn");
+  if (viewPlaybackBtn) viewPlaybackBtn.addEventListener("click", initPlayback);
+
+  const pbBackBtn = $("#pbBackToDecision");
+  if (pbBackBtn) pbBackBtn.addEventListener("click", () => showPage("decision"));
 });
