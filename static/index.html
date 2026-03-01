@@ -100,6 +100,10 @@
         <div class="timer" id="timer">00:00</div>
       </div>
       <div class="header-right">
+        <div class="proctor-status" id="proctorStatus">
+          <span class="proctor-dot" id="proctorDot"></span>
+          <span id="proctorLabel">Proctor: Loading...</span>
+        </div>
         <button class="btn-end" id="endInterviewBtn" title="End interview and get decision">
           <svg viewBox="0 0 24 24" fill="none" width="16" height="16"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>
           End Interview
@@ -137,6 +141,18 @@
 
       <!-- ===== RIGHT: DISCUSSION + ANALYSIS (40%) ===== -->
       <div class="right-panel">
+        <!-- Webcam proctoring -->
+        <div class="webcam-section" id="webcamSection" style="display:none">
+          <div class="webcam-feed-wrapper">
+            <video id="proctorPipVideo" autoplay muted playsinline></video>
+            <div class="webcam-stats-overlay" id="proctorPipStats">
+              <span id="pipFaceStatus">Face: N/A</span>
+              <span id="pipMultiFace">Multi: 0</span>
+              <span id="pipGazeAway">Gaze: 0</span>
+              <span id="pipTrust">Trust: 100%</span>
+            </div>
+          </div>
+        </div>
         <!-- Discussion transcript -->
         <div class="discussion-panel">
           <div class="discussion-messages" id="discussionMessages"></div>
@@ -388,6 +404,9 @@
     </div>
   </section>
 
+  <!-- Hidden video for face-api detection -->
+  <video id="proctorVideo" autoplay muted playsinline style="display:none"></video>
+
   <!-- Paste blocked warning -->
   <div id="pasteWarning" class="paste-warning">Paste is disabled in the code editor</div>
 
@@ -401,6 +420,11 @@
   </div>
 
 
+
+  <!-- face-api.js with AMD fix (must load before Monaco's require.js) -->
+  <script>window.__define = window.define; window.define = undefined;</script>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <script>window.define = window.__define; delete window.__define;</script>
 
   <!-- Monaco Editor from CDN -->
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>

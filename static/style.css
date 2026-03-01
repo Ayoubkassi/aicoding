@@ -887,6 +887,29 @@ body{font-family:var(--font-ui);background:var(--bg);color:var(--text);height:10
   0%,100%{opacity:1}50%{opacity:.4}
 }
 
+
+/* ========== WEBCAM SECTION (in right panel) ========== */
+.webcam-section{
+  flex-shrink:0;border-bottom:1px solid var(--border);background:#000;
+}
+.webcam-feed-wrapper{position:relative}
+.webcam-feed-wrapper video{
+  width:100%;height:auto;display:block;transform:scaleX(-1);
+  max-height:264px;object-fit:cover;
+}
+.webcam-stats-overlay{
+  position:absolute;bottom:0;left:0;right:0;
+  display:flex;gap:8px;padding:5px 8px;
+  background:linear-gradient(transparent, rgba(0,0,0,.85));
+  font-size:.65rem;font-weight:600;color:rgba(255,255,255,.8);
+}
+.webcam-stats-overlay span{white-space:nowrap}
+.webcam-stats-overlay .face-ok{color:var(--green)}
+.webcam-stats-overlay .face-bad{color:var(--red)}
+.webcam-stats-overlay .trust-high{color:var(--green)}
+.webcam-stats-overlay .trust-mid{color:var(--yellow)}
+.webcam-stats-overlay .trust-low{color:var(--red)}
+
 /* ========== RESPONSIVE: DECISION PAGE ========== */
 @media (max-width:900px){
   .decision-container{max-width:100%;padding:1rem .7rem 1.5rem}

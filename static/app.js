@@ -32,6 +32,9 @@ const state = {
     languageChangeAttempts: 0,
     voiceMultipleSpeakers: 0,
     voiceConsistentLatency: 0,
+    faceNotVisibleCount: 0,
+    multipleFacesCount: 0,
+    gazeAwayCount: 0,
   },
   sentimentHistory: [],
   timeline: [],
@@ -1296,6 +1299,9 @@ function computeIntegrityScore() {
   score -= state.cheatingStats.languageChangeAttempts * 10;
   score -= Math.min(state.cheatingStats.voiceMultipleSpeakers * 8, 20);
   score -= Math.min(state.cheatingStats.voiceConsistentLatency * 10, 25);
+  score -= Math.min(state.cheatingStats.faceNotVisibleCount * 5, 20);
+  score -= Math.min(state.cheatingStats.multipleFacesCount * 10, 25);
+  score -= Math.min(state.cheatingStats.gazeAwayCount * 2, 15);
   return Math.max(0, score);
 }
 
@@ -1386,6 +1392,7 @@ function renderHumanImpression() {
 }
 
 function showFeedbackPage(decisionData) {
+  stopProctor();
   state._pendingDecision = decisionData;
   showPage("feedback");
   const ta = $("#feedbackPageInput");
@@ -1455,7 +1462,8 @@ function buildFullReportText(decision) {
   const flaggedEvents = state.cheatingLog.filter((e) =>
     ["tab_blocked", "paste_blocked", "tab_then_paste", "large_paste", "typing_burst",
      "fast_response", "long_silence", "manipulation_attempt",
-     "language_change_attempt", "multiple_voices", "consistent_latency"].includes(e.type)
+     "language_change_attempt", "multiple_voices", "consistent_latency",
+     "proctor_no_face", "proctor_gaze_away", "proctor_multi_face", "phase_skip_blocked"].includes(e.type)
   );
   if (flaggedEvents.length === 0) {
     report += "  No suspicious activity detected.\n\n";
@@ -1508,7 +1516,8 @@ function renderIntegrityReport() {
   const cheatingEvents = state.cheatingLog.filter((e) =>
     ["tab_blocked", "paste_blocked", "tab_then_paste", "large_paste", "large_paste_input", "typing_burst",
      "fast_response", "long_silence", "manipulation_attempt",
-     "language_change_attempt", "multiple_voices", "consistent_latency"].includes(e.type)
+     "language_change_attempt", "multiple_voices", "consistent_latency",
+     "proctor_no_face", "proctor_gaze_away", "proctor_multi_face", "phase_skip_blocked"].includes(e.type)
   );
   if (cheatingEvents.length === 0) {
     detailsEl.innerHTML = '<div class="integrity-clean">No suspicious activity detected.</div>';
@@ -1535,7 +1544,10 @@ function renderIntegrityReport() {
     (state.cheatingStats.manipulationAttempts > 0 ? `<span class="stat-alert">Manipulation attempts: <b>${state.cheatingStats.manipulationAttempts}</b></span>` : "") +
     (state.cheatingStats.languageChangeAttempts > 0 ? `<span class="stat-alert">Language change attempts: <b>${state.cheatingStats.languageChangeAttempts}</b></span>` : "") +
     (state.cheatingStats.voiceMultipleSpeakers > 0 ? `<span class="stat-alert">Multiple voices: <b>${state.cheatingStats.voiceMultipleSpeakers}</b></span>` : "") +
-    (state.cheatingStats.voiceConsistentLatency > 0 ? `<span class="stat-alert">AI-like response timing: <b>${state.cheatingStats.voiceConsistentLatency}</b></span>` : "");
+    (state.cheatingStats.voiceConsistentLatency > 0 ? `<span class="stat-alert">AI-like response timing: <b>${state.cheatingStats.voiceConsistentLatency}</b></span>` : "") +
+    (state.cheatingStats.faceNotVisibleCount > 0 ? `<span class="stat-alert">Face not visible: <b>${state.cheatingStats.faceNotVisibleCount}</b></span>` : "") +
+    (state.cheatingStats.multipleFacesCount > 0 ? `<span class="stat-alert">Multiple faces: <b>${state.cheatingStats.multipleFacesCount}</b></span>` : "") +
+    (state.cheatingStats.gazeAwayCount > 0 ? `<span>Gaze away: <b>${state.cheatingStats.gazeAwayCount}</b></span>` : "");
   detailsEl.appendChild(summary);
   cheatingEvents.forEach((evt) => {
     const item = document.createElement("div");
@@ -1784,6 +1796,145 @@ function stepPlayback(dir) {
   }
 }
 
+
+// ==================== PROCTOR ENGINE (face-api.js) ====================
+let _proctorInterval = null;
+let _proctorReady = false;
+let _faceWasVisible = true;
+let _proctorStream = null;
+
+async function initProctor() {
+  const label = $("#proctorLabel");
+  const dot = $("#proctorDot");
+  try {
+    const MODEL_URL = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights";
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
+    ]);
+
+    _proctorStream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, facingMode: "user" }, audio: false });
+    const video = $("#proctorVideo");
+    const pipVideo = $("#proctorPipVideo");
+    video.srcObject = _proctorStream;
+    pipVideo.srcObject = _proctorStream;
+    await video.play();
+    await pipVideo.play();
+
+    $("#webcamSection").style.display = "";
+    _proctorReady = true;
+    if (label) label.textContent = "Proctor: Active";
+    if (dot) dot.classList.add("active");
+
+    _proctorInterval = setInterval(() => runProctorTick(video), 2000);
+  } catch (e) {
+    console.warn("Proctor init failed:", e);
+    if (label) label.textContent = "Proctor: N/A";
+    $("#pipFaceStatus").textContent = "Face: N/A";
+  }
+}
+
+async function runProctorTick(video) {
+  if (!_proctorReady || video.readyState < 2) return;
+  try {
+    const detections = await faceapi
+      .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+      .withFaceLandmarks(true);
+
+    const numFaces = detections.length;
+    const faceEl = $("#pipFaceStatus");
+    const multiEl = $("#pipMultiFace");
+    const gazeEl = $("#pipGazeAway");
+
+    if (numFaces === 0) {
+      if (_faceWasVisible) {
+        state.cheatingStats.faceNotVisibleCount++;
+        logCheat("proctor_no_face", "Face not visible");
+        _faceWasVisible = false;
+      }
+      if (faceEl) { faceEl.textContent = "Face: Not visible \u2717"; faceEl.className = "face-bad"; }
+    } else {
+      _faceWasVisible = true;
+      if (faceEl) { faceEl.textContent = "Face: Visible \u2713"; faceEl.className = "face-ok"; }
+    }
+
+    if (numFaces > 1) {
+      state.cheatingStats.multipleFacesCount++;
+      logCheat("proctor_multi_face", `${numFaces} faces detected`);
+    }
+    if (multiEl) multiEl.textContent = "Multi: " + state.cheatingStats.multipleFacesCount;
+
+    if (numFaces >= 1) {
+      const det = detections[0];
+      const box = det.detection.box;
+      const vw = video.videoWidth || 320;
+      const vh = video.videoHeight || 240;
+      const cx = (box.x + box.width / 2) / vw;
+      const cy = (box.y + box.height / 2) / vh;
+      const offCenterH = Math.abs(cx - 0.5) > 0.20;
+      const offCenterV = Math.abs(cy - 0.5) > 0.25;
+
+      let gazeAway = offCenterH || offCenterV;
+
+      const lm = det.landmarks;
+      const positions = lm.positions;
+      const leftEye = lm.getLeftEye();
+      const rightEye = lm.getRightEye();
+      const nose = lm.getNose();
+      if (leftEye.length && rightEye.length && nose.length) {
+        const lec = { x: leftEye.reduce((s, p) => s + p.x, 0) / leftEye.length, y: leftEye.reduce((s, p) => s + p.y, 0) / leftEye.length };
+        const rec = { x: rightEye.reduce((s, p) => s + p.x, 0) / rightEye.length, y: rightEye.reduce((s, p) => s + p.y, 0) / rightEye.length };
+        const eyeMidX = (lec.x + rec.x) / 2;
+        const interEyeDist = Math.sqrt((rec.x - lec.x) ** 2 + (rec.y - lec.y) ** 2);
+        const noseTip = nose[nose.length - 1] || nose[3];
+        if (interEyeDist > 0) {
+          const noseOffX = (noseTip.x - eyeMidX) / interEyeDist;
+          if (Math.abs(noseOffX) > 0.55) gazeAway = true;
+        }
+      }
+
+      if (gazeAway) {
+        state.cheatingStats.gazeAwayCount++;
+        logCheat("proctor_gaze_away", "Candidate looking away from screen");
+      }
+    }
+    if (gazeEl) gazeEl.textContent = "Gaze: " + state.cheatingStats.gazeAwayCount;
+
+    updateTrustScore();
+  } catch (e) {
+    // detection can fail on some frames, skip
+  }
+}
+
+function updateTrustScore() {
+  let trust = 100;
+  trust -= Math.min(state.cheatingStats.faceNotVisibleCount * 5, 25);
+  trust -= Math.min(state.cheatingStats.multipleFacesCount * 10, 30);
+  trust -= Math.min(state.cheatingStats.gazeAwayCount * 2, 20);
+  trust = Math.max(0, trust);
+
+  const el = $("#pipTrust");
+  if (el) {
+    el.textContent = "Trust: " + trust + "%";
+    el.className = trust >= 80 ? "trust-high" : trust >= 50 ? "trust-mid" : "trust-low";
+  }
+}
+
+function stopProctor() {
+  if (_proctorInterval) { clearInterval(_proctorInterval); _proctorInterval = null; }
+  _proctorReady = false;
+  if (_proctorStream) {
+    _proctorStream.getTracks().forEach(t => t.stop());
+    _proctorStream = null;
+  }
+  const ws = $("#webcamSection");
+  if (ws) ws.style.display = "none";
+  const dot = $("#proctorDot");
+  if (dot) dot.classList.remove("active");
+  const label = $("#proctorLabel");
+  if (label) label.textContent = "Proctor: Off";
+}
+
 // ==================== EVENT LISTENERS ====================
 document.addEventListener("DOMContentLoaded", () => {
   initMonaco();
@@ -1806,6 +1957,7 @@ document.addEventListener("DOMContentLoaded", () => {
     startTimer();
     _tabDetectionGraceUntil = Date.now() + 8000;
     initCheatingDetection();
+    initProctor();
     startInterview();
   });
 
