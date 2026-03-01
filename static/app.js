@@ -552,7 +552,7 @@ function initVoice() {
           if (text) sendMessage(text);
           setTimeout(() => { if (isRecording && !isSpeaking) try { recognition.start(); } catch {} }, 500);
         }
-      }, 3500);
+      }, 1500);
     }
   };
 
@@ -662,10 +662,8 @@ async function speakText(text) {
     currentAudio = new Audio(url);
     _audioStartTime = Date.now();
 
-    _speakResolve = null;
-    currentAudio.onended = () => {
+    const cleanup = () => {
       URL.revokeObjectURL(url);
-      _speakResolve = null;
       if (isSpeaking) {
         currentAudio = null;
         isSpeaking = false;
@@ -673,16 +671,9 @@ async function speakText(text) {
         resumeMicIfActive();
       }
     };
-    currentAudio.onerror = () => {
-      URL.revokeObjectURL(url);
-      _speakResolve = null;
-      if (isSpeaking) {
-        currentAudio = null;
-        isSpeaking = false;
-        _audioStartTime = 0;
-        resumeMicIfActive();
-      }
-    };
+
+    currentAudio.onended = cleanup;
+    currentAudio.onerror = cleanup;
     currentAudio.play().catch(() => {
       isSpeaking = false;
       _audioStartTime = 0;
