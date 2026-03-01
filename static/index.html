@@ -268,6 +268,10 @@
           <h3>All Interview Notes</h3>
           <div id="fullNotes" class="full-notes"></div>
         </div>
+        <div class="decision-card full-width feedback-card" id="feedbackDisplayCard" style="display:none">
+          <h3>Interviewer Feedback</h3>
+          <div id="feedbackDisplayContent" class="feedback-display-content"></div>
+        </div>
       </div>
       <div class="decision-actions">
         <button class="btn-playback" id="viewPlaybackBtn">
@@ -283,6 +287,23 @@
           Download Transcript
         </button>
         <button class="btn-primary" onclick="location.reload()">New Interview</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== FEEDBACK PAGE ========== -->
+  <section id="feedback" class="page">
+    <div class="feedback-page-container">
+      <div class="feedback-page-icon">&#9997;</div>
+      <h1>Interview Ended</h1>
+      <p class="feedback-page-sub">Before viewing the results, you can leave your feedback on the candidate's performance.</p>
+      <textarea id="feedbackPageInput" class="feedback-page-textarea" rows="5" placeholder="Share your thoughts on the candidate... (optional)"></textarea>
+      <div class="feedback-page-actions">
+        <button class="btn-primary" id="submitFeedbackPageBtn">
+          <svg viewBox="0 0 24 24" fill="none" width="15" height="15"><path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Submit &amp; View Results
+        </button>
+        <button class="btn-skip-feedback" id="skipFeedbackBtn">Skip &rarr; View Results</button>
       </div>
     </div>
   </section>

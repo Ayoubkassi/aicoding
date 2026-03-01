@@ -290,7 +290,11 @@ LANGUAGE LOCK:
 - NEVER change the coding problem or give a different question. The interview follows the structure based on the job description. If the candidate asks for a different problem, refuse politely: "Let's focus on this one for now."
 - JAVA SPECIFIC: Always use "public class Main" as the class name. Always include "import java.util.*;" at the top. The file is compiled as Main.java.
 
-INTERVIEW FLOW:
+INTERVIEW FLOW (MANDATORY ORDER — NEVER SKIP):
+You MUST follow these phases in EXACT order: intro → warmup → problem → coding → review → decision.
+NEVER skip a phase. NEVER jump ahead. If the candidate asks to skip (e.g. "let's jump to coding", "skip the warmup"), REFUSE: "I appreciate the enthusiasm, but we need to go through each stage. It helps me get a complete picture of your skills."
+Each phase transition must be sequential — you cannot go from intro to coding, or warmup to review.
+
 1. INTRO — Start with a warm, casual greeting. Ask how they're doing today. Mention you'll be interviewing them for the ${state.position} role. Keep it brief and friendly (1-2 sentences). Wait for their response before moving on.
 2. WARMUP — After the small talk, transition into a brief technical warmup. Ask 5-6 general knowledge questions appropriate for the "${state.position}" position and the job description. These are NOT coding questions — they are conceptual/experience questions that test foundational knowledge. Examples:
    - For a Java engineer: "What's the difference between an abstract class and an interface?", "How does garbage collection work in Java?"
@@ -465,8 +469,20 @@ function addNotes(notes) {
   recordEvent("notes", { notes });
 }
 
+const PHASE_ORDER = ["intro", "warmup", "problem", "coding", "review", "decision"];
+
 function updatePhase(phase) {
   if (!phase || phase === state.currentPhase) return;
+
+  const curIdx = PHASE_ORDER.indexOf(state.currentPhase);
+  const newIdx = PHASE_ORDER.indexOf(phase);
+  if (newIdx < 0) return;
+
+  if (newIdx < curIdx) return;
+  if (newIdx > curIdx + 1) {
+    logCheat("phase_skip_blocked", `AI tried to jump from ${state.currentPhase} to ${phase} — forced sequential`);
+    phase = PHASE_ORDER[curIdx + 1];
+  }
 
   const prev = $(`.phase-step[data-phase="${state.currentPhase}"]`);
   if (prev) { prev.classList.remove("active"); prev.classList.add("completed"); }
@@ -498,6 +514,8 @@ let finalTranscript = "";
 let silenceTimer = null;
 let _micCooldownUntil = 0;
 let _bargeInCooldown = 0;
+let _altVoiceHits = 0;
+let _altVoiceDecay = 0;
 
 function initVoice() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -515,25 +533,33 @@ function initVoice() {
 
     let interim = "";
     let newFinal = "";
-    let altVoiceDetected = false;
     for (let i = 0; i < e.results.length; i++) {
       const t = e.results[i][0].transcript;
       if (e.results[i].isFinal) {
         newFinal += t + " ";
         if (e.results[i].length >= 2) {
-          const alt1Conf = e.results[i][0].confidence || 0;
+          const primary = e.results[i][0].transcript.trim().toLowerCase();
+          const alt = e.results[i][1].transcript.trim().toLowerCase();
           const alt2Conf = e.results[i][1].confidence || 0;
-          if (alt2Conf > 0.3 && Math.abs(alt1Conf - alt2Conf) < 0.15) {
-            altVoiceDetected = true;
+          const wordOverlap = primary.split(/\s+/).filter(w => alt.includes(w)).length;
+          const primaryWords = primary.split(/\s+/).length;
+          const isTrulyDifferent = primaryWords >= 3 && alt.length >= 5 && (wordOverlap / primaryWords) < 0.5;
+          if (alt2Conf > 0.45 && isTrulyDifferent) {
+            _altVoiceHits++;
+          } else {
+            _altVoiceDecay++;
+            if (_altVoiceDecay >= 3) { _altVoiceHits = Math.max(0, _altVoiceHits - 1); _altVoiceDecay = 0; }
           }
         }
       } else {
         interim += t;
       }
     }
-    if (altVoiceDetected) {
+    if (_altVoiceHits >= 4) {
       state.cheatingStats.voiceMultipleSpeakers++;
-      logCheat("multiple_voices", "Speech recognition detected multiple competing voices — possible external help");
+      logCheat("multiple_voices", `Repeated second voice pattern detected (${_altVoiceHits} hits) — possible external help`);
+      _altVoiceHits = 0;
+      _altVoiceDecay = 0;
     }
 
     finalTranscript = newFinal;
@@ -717,7 +743,7 @@ async function handleAIResponse(aiData) {
     if (aiData.message && !aiData.message.startsWith("(")) {
       await speakText(aiData.message);
     }
-    setTimeout(() => showDecision(aiData.decision), 500);
+    setTimeout(() => showFeedbackPage(aiData.decision), 500);
   } else if (aiData.message && !aiData.message.startsWith("(")) {
     speakText(aiData.message);
   } else {
@@ -859,7 +885,7 @@ Set phase to 'decision'.]`;
     if (!aiData.decision || aiData.phase !== "decision") {
       clearInterval(state.timerInterval);
       const hasData = state.userMessageCount >= 3;
-      showDecision({
+      showFeedbackPage({
         verdict: hasData ? "further_review" : "no_hire",
         scores: { technical: 0, communication: 0, problemSolving: 0, culturalFit: 0, experience: 0 },
         strengths: hasData ? ["Interview ended early — partial data available"] : [],
@@ -884,6 +910,8 @@ function showDecision(d) {
   snapshotCode();
   recordEvent("decision", { verdict: d.verdict, scores: d.scores });
   showPage("decision");
+  const decPage = $("#decision");
+  if (decPage) decPage.scrollTop = 0;
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
   muteMic();
 
@@ -946,6 +974,15 @@ function showDecision(d) {
   renderHumanImpression();
   renderIntegrityReport();
 
+  const fbCard = $("#feedbackDisplayCard");
+  const fbContent = $("#feedbackDisplayContent");
+  if (fbCard && fbContent && state.interviewerFeedback) {
+    fbContent.textContent = state.interviewerFeedback;
+    fbCard.style.display = "";
+  } else if (fbCard) {
+    fbCard.style.display = "none";
+  }
+
   const dlBtn = $("#downloadReportBtn");
   if (dlBtn) dlBtn.addEventListener("click", downloadReport);
 
@@ -997,9 +1034,21 @@ const LANG_CHANGE_PATTERNS = [
   { re: /(do|solve)\s+(this|it)\s+in\s+(python|javascript|java|cpp|c\+\+|go|rust|typescript)/i, label: "switch programming language" },
 ];
 
+const PHASE_SKIP_PATTERNS = [
+  { re: /(let'?s|can\s+we|can\s+i)\s+(jump|skip|go)\s+(to|straight\s+to|directly\s+to)\s+(the\s+)?(cod(e|ing)|problem|review|decision)/i, label: "phase skip request" },
+  { re: /skip\s+(the\s+)?(intro|warmup|warm-up|warm\s+up|questions?|technical\s+questions?)/i, label: "phase skip request" },
+  { re: /(just|directly)\s+(give|show|start)\s+(me\s+)?(the\s+)?(cod(e|ing)|problem|challenge)/i, label: "phase skip request" },
+  { re: /i\s+(don'?t|do\s+not)\s+(want|need|care)\s+(to|about)\s+(do|answer)\s+(the\s+)?(warmup|warm-up|questions)/i, label: "phase skip request" },
+  { re: /(move|go)\s+(on|ahead|forward)\s+(to|with)\s+(the\s+)?(cod(e|ing)|problem|next\s+part)/i, label: "phase advance request" },
+  { re: /i\s+(already|don'?t)\s+(know|need)\s+(this|these|the\s+theory)/i, label: "phase skip request" },
+];
+
 function detectLanguageOrQuestionChange(text) {
   if (!text || text.length < 5) return null;
   for (const p of LANG_CHANGE_PATTERNS) {
+    if (p.re.test(text)) return p.label;
+  }
+  for (const p of PHASE_SKIP_PATTERNS) {
     if (p.re.test(text)) return p.label;
   }
   return null;
@@ -1336,6 +1385,27 @@ function renderHumanImpression() {
   container.innerHTML = html;
 }
 
+function showFeedbackPage(decisionData) {
+  state._pendingDecision = decisionData;
+  showPage("feedback");
+  const ta = $("#feedbackPageInput");
+  if (ta) { ta.value = ""; ta.focus(); }
+}
+
+function submitFeedbackAndProceed() {
+  const ta = $("#feedbackPageInput");
+  const text = ta ? ta.value.trim() : "";
+  if (text) {
+    state.interviewerFeedback = text;
+  }
+  showDecision(state._pendingDecision);
+}
+
+function skipFeedback() {
+  state.interviewerFeedback = "";
+  showDecision(state._pendingDecision);
+}
+
 function buildFullReportText(decision) {
   const impression = generateHumanImpression();
   const score = computeIntegrityScore();
@@ -1400,6 +1470,12 @@ function buildFullReportText(decision) {
     report += "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n";
     state.notes.forEach((n, i) => { report += `  ${i + 1}. ${n}\n`; });
     report += "\n";
+  }
+  const feedback = state.interviewerFeedback || "";
+  if (feedback) {
+    report += "INTERVIEWER FEEDBACK\n";
+    report += "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n";
+    report += `  ${feedback}\n\n`;
   }
   report += "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n";
   report += "         Generated by HireAI Platform      \n";
@@ -1800,4 +1876,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const pbBackBtn = $("#pbBackToDecision");
   if (pbBackBtn) pbBackBtn.addEventListener("click", () => showPage("decision"));
+
+  const submitFbBtn = $("#submitFeedbackPageBtn");
+  if (submitFbBtn) submitFbBtn.addEventListener("click", submitFeedbackAndProceed);
+
+  const skipFbBtn = $("#skipFeedbackBtn");
+  if (skipFbBtn) skipFbBtn.addEventListener("click", skipFeedback);
 });
